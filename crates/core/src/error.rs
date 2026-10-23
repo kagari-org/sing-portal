@@ -22,8 +22,4 @@ pub enum Error {
     TemplateNotObject,
     #[error("template must not contain an outbounds key; the renderer owns it")]
     TemplateHasOutbounds,
-    #[error("clash api: {0}")]
-    ClashApi(String),
-    #[error("http: {0}")]
-    Http(#[from] reqwest::Error),
 }

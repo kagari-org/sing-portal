@@ -103,13 +103,6 @@ struct AgentArgs {
 
     #[arg(
         long,
-        env = "SING_PORTAL_CLASH",
-        default_value = "http://127.0.0.1:9090"
-    )]
-    clash: String,
-
-    #[arg(
-        long,
         env = "SING_PORTAL_RESTART_CMD",
         default_value = "systemctl restart sing-box"
     )]
@@ -127,13 +120,6 @@ struct AgentArgs {
     #[arg(long = "best-effort")]
     best_effort: bool,
 
-    #[arg(
-        long,
-        env = "SING_PORTAL_TEST_LATENCY_URL",
-        default_value = "https://www.gstatic.com/generate_204"
-    )]
-    test_latency_url: String,
-
     #[arg(long, env = "SING_PORTAL_TEST_TIMEOUT", default_value = "20s")]
     test_timeout: String,
 
@@ -145,10 +131,7 @@ struct AgentArgs {
     test_nq_runtime: u64,
 
     #[arg(long, env = "SING_PORTAL_API_URL")]
-    api_url: Option<String>,
-
-    #[arg(long, env = "SING_PORTAL_API_SECRET")]
-    api_secret: Option<String>,
+    api_url: String,
 
     #[arg(long, env = "SING_PORTAL_TEST_NQ_CONFIG_URL")]
     test_nq_config_url: Option<String>,
@@ -217,7 +200,7 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         config_path: args.config,
         state_dir: args.state_dir.clone(),
         sing_box_bin: args.sing_box.clone(),
-        clash_url: args.clash,
+        api_url: args.api_url,
         restart_cmd: if args.restart_cmd.is_empty() {
             None
         } else {
@@ -228,10 +211,6 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         best_effort: args.best_effort,
         health_timeout: parse_duration(&args.health_timeout).map_err(anyhow::Error::msg)?,
         tester: sing_portal_agent::tester::TesterConfig {
-            sing_box: args.sing_box.clone().into(),
-            api_url: args.api_url,
-            api_secret: args.api_secret,
-            latency_url: args.test_latency_url,
             timeout: parse_duration(&args.test_timeout).map_err(anyhow::Error::msg)?,
             network_quality_runtime: args.test_nq_runtime,
             network_quality_config_url: args.test_nq_config_url,

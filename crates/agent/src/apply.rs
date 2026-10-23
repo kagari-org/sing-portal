@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use sing_portal_core::clash_api::ClashClient;
+use crate::api::BoxApi;
 use sing_portal_core::model::outbound_tag;
 use sing_portal_core::render::{AUTO_TAG, DIRECT_TAG, SELECTOR_TAG, render, to_bytes};
 
@@ -10,7 +10,7 @@ use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
 use crate::state;
 
-pub async fn apply(config: &AgentConfig, outbounds: &[Value], clash: &ClashClient) -> Result<()> {
+pub async fn apply(config: &AgentConfig, outbounds: &[Value], api: &BoxApi) -> Result<()> {
     let template_bytes = tokio::fs::read(&config.template_path).await?;
     let template: Value = serde_json::from_slice(&template_bytes)?;
     let rendered = render(&template, outbounds)?;
@@ -32,10 +32,10 @@ pub async fn apply(config: &AgentConfig, outbounds: &[Value], clash: &ClashClien
 
     restart(config).await?;
 
-    match wait_healthy(config, clash).await {
+    match wait_healthy(config, api).await {
         Ok(()) => Ok(()),
         Err(error) => {
-            rollback(config, clash).await?;
+            rollback(config, api).await?;
             Err(error)
         }
     }
@@ -77,10 +77,10 @@ async fn restart(config: &AgentConfig) -> Result<()> {
     Ok(())
 }
 
-async fn wait_healthy(config: &AgentConfig, clash: &ClashClient) -> Result<()> {
+async fn wait_healthy(config: &AgentConfig, api: &BoxApi) -> Result<()> {
     let deadline = Instant::now() + config.health_timeout;
     loop {
-        if clash.version().await.is_ok() {
+        if api.version().await.is_ok() {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -90,7 +90,7 @@ async fn wait_healthy(config: &AgentConfig, clash: &ClashClient) -> Result<()> {
     }
 }
 
-async fn rollback(config: &AgentConfig, clash: &ClashClient) -> Result<()> {
+async fn rollback(config: &AgentConfig, api: &BoxApi) -> Result<()> {
     let previous = config.outbounds_previous_path();
     if !tokio::fs::try_exists(&previous).await.unwrap_or(false) {
         return Err(AgentError::Check(
@@ -107,11 +107,11 @@ async fn rollback(config: &AgentConfig, clash: &ClashClient) -> Result<()> {
     state::write_atomic(&config.outbounds_path(), &outbounds_bytes).await?;
     state::write_atomic(&config.config_path, &config_bytes).await?;
     restart(config).await?;
-    wait_healthy(config, clash).await
+    wait_healthy(config, api).await
 }
 
 pub async fn apply_selection(
-    clash: &ClashClient,
+    api: &BoxApi,
     desired: &str,
     tags: &[String],
 ) -> Result<String> {
@@ -125,19 +125,19 @@ pub async fn apply_selection(
         AUTO_TAG.to_string()
     };
 
-    if let Ok(current) = clash.current_selection().await
+    if let Ok(current) = api.current_selection().await
         && current == target
     {
         return Ok(target);
     }
 
-    match clash.select(SELECTOR_TAG, &target).await {
+    match api.select(SELECTOR_TAG, &target).await {
         Ok(()) => Ok(target),
         Err(error) => {
-            if target != AUTO_TAG && clash.select(SELECTOR_TAG, AUTO_TAG).await.is_ok() {
+            if target != AUTO_TAG && api.select(SELECTOR_TAG, AUTO_TAG).await.is_ok() {
                 Ok(AUTO_TAG.to_string())
             } else {
-                Err(AgentError::Clash(error.to_string()))
+                Err(AgentError::BoxApi(error.to_string()))
             }
         }
     }

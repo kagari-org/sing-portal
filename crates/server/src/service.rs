@@ -242,13 +242,11 @@ pub async fn probe(
     machine: &str,
     tag: &str,
     kind: &str,
-    url: Option<&str>,
 ) -> ApiResult<crate::handlers::views::TestResponse> {
     let message = ServerMessage::Test {
         id: uuid::Uuid::now_v7().to_string(),
         kind: kind.to_string(),
         tag: tag.to_string(),
-        url: url.map(ToString::to_string),
     };
     let timeout = match kind {
         "bandwidth" | "both" => Duration::from_secs(90),
@@ -299,24 +297,6 @@ pub async fn select(state: &AppState, machine: &str, outbound: &str) -> ApiResul
             tracing::debug!(%machine, %error, "selection not applied, kept as desired value");
             Ok(false)
         }
-    }
-}
-
-pub async fn proxies(state: &AppState, machine: &str) -> ApiResult<Value> {
-    let message = ServerMessage::Proxies {
-        id: uuid::Uuid::now_v7().to_string(),
-    };
-
-    match state
-        .registry()
-        .request(machine, message, Duration::from_secs(5))
-        .await?
-    {
-        AgentMessage::ProxiesResult { proxies, .. } => Ok(proxies),
-        AgentMessage::Error { message, .. } => Err(ApiError::Upstream(message)),
-        other => Err(ApiError::Upstream(format!(
-            "unexpected agent reply: {other:?}"
-        ))),
     }
 }
 

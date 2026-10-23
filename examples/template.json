@@ -8,8 +8,13 @@
       "listen_port": 7897
     }
   ],
-  "route": { "final": "s_out" },
-  "experimental": {
-    "clash_api": { "external_controller": "127.0.0.1:9090" }
-  }
+  "services": [
+    {
+      "type": "api",
+      "tag": "s_api",
+      "listen": "127.0.0.1",
+      "listen_port": 9091
+    }
+  ],
+  "route": { "final": "s_out" }
 }

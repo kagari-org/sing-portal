@@ -15,16 +15,7 @@ pub use model::{
     Source, Subscription, SubscriptionPatch,
 };
 
-const MIGRATIONS: &[(&str, &str)] = &[
-    (
-        "0001_init",
-        include_str!("../../../migrations/0001_init.sql"),
-    ),
-    (
-        "0002_auto_selection",
-        include_str!("../../../migrations/0002_auto_selection.sql"),
-    ),
-];
+const SCHEMA: &str = include_str!("../../../migrations/0001_init.sql");
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -79,33 +70,7 @@ impl Store {
     }
 
     async fn migrate(&self) -> Result<()> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        for (version, sql) in MIGRATIONS {
-            let applied: Option<String> =
-                sqlx::query_scalar("SELECT version FROM schema_migrations WHERE version = ?")
-                    .bind(*version)
-                    .fetch_optional(&self.pool)
-                    .await?;
-
-            if applied.is_some() {
-                continue;
-            }
-
-            let mut transaction = self.pool.begin().await?;
-            sqlx::raw_sql(sql).execute(&mut *transaction).await?;
-            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)")
-                .bind(*version)
-                .bind(now())
-                .execute(&mut *transaction)
-                .await?;
-            transaction.commit().await?;
-        }
-
+        sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
         Ok(())
     }
 

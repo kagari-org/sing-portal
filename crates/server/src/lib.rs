@@ -45,7 +45,6 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/providers", get(providers::list))
         .route("/api/nodes", get(nodes::list))
-        .route("/api/nodes/{name}/proxies", get(nodes::proxies))
         .route("/api/nodes/{name}/selection", put(nodes::set_selection))
         .route("/api/nodes/{name}/test", post(nodes::test))
         .route("/api/nodes/{name}/auto", post(nodes::auto))

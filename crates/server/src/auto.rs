@@ -90,7 +90,7 @@ pub async fn evaluate_machine(state: &AppState, machine: &str) -> ApiResult<Opti
 
     let mut latency: Vec<(String, f64)> = Vec::new();
     for tag in &tags {
-        if let Ok(probe) = service::probe(state, machine, tag, "latency", None).await
+        if let Ok(probe) = service::probe(state, machine, tag, "latency").await
             && let Some(latency_ms) = probe.latency_ms
         {
             latency.push((tag.clone(), latency_ms));
@@ -120,7 +120,7 @@ pub async fn evaluate_machine(state: &AppState, machine: &str) -> ApiResult<Opti
     let mut scored: Vec<(String, f64, Option<f64>, Option<f64>)> = Vec::new();
 
     for tag in &candidates {
-        match service::probe(state, machine, tag, "both", None).await {
+        match service::probe(state, machine, tag, "both").await {
             Ok(probe) => {
                 let score = state
                     .config()

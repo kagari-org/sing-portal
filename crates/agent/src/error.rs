@@ -6,16 +6,14 @@ pub enum AgentError {
     Json(#[from] serde_json::Error),
     #[error("portal: {0}")]
     Portal(String),
-    #[error("clash api: {0}")]
-    Clash(String),
+    #[error("sing-box api: {0}")]
+    BoxApi(String),
     #[error("sing-box check failed: {0}")]
     Check(String),
     #[error("sing-box did not become healthy within timeout")]
     Unhealthy,
     #[error("template: {0}")]
     Template(String),
-    #[error("proxy inbound: {0}")]
-    Proxy(String),
     #[error("measurement failed: {0}")]
     Measure(String),
 }

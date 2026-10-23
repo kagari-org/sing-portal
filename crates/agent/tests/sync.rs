@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -9,8 +8,6 @@ use tempfile::TempDir;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{WebSocketStream, accept_async};
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const TEMPLATE: &str = r#"{
   "log": { "level": "warn" },
@@ -30,31 +27,10 @@ fn outbounds() -> Value {
 struct Fixture {
     dir: TempDir,
     config: AgentConfig,
-    clash: MockServer,
 }
 
 async fn fixture(portal: String) -> Fixture {
     let dir = TempDir::new().unwrap();
-    let clash = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/version"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version": "1.14.3"})))
-        .mount(&clash)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/proxies/s_out"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"now": "s_auto"})))
-        .mount(&clash)
-        .await;
-
-    Mock::given(method("PUT"))
-        .and(path("/proxies/s_out"))
-        .respond_with(ResponseTemplate::new(204))
-        .mount(&clash)
-        .await;
-
     let template_path = dir.path().join("template.json");
     std::fs::write(&template_path, TEMPLATE).unwrap();
 
@@ -65,19 +41,16 @@ async fn fixture(portal: String) -> Fixture {
         config_path: dir.path().join("run/config.json"),
         state_dir: dir.path().join("state"),
         sing_box_bin: fake_sing_box(&dir),
-        clash_url: clash.uri(),
+        api_url: "http://127.0.0.1:1".into(),
         restart_cmd: None,
         interval: Duration::from_secs(15),
         once: true,
         best_effort: false,
         health_timeout: Duration::from_millis(600),
-        tester: sing_portal_agent::tester::TesterConfig {
-            sing_box: fake_sing_box(&dir).into(),
-            ..Default::default()
-        },
+        tester: sing_portal_agent::tester::TesterConfig::default(),
     };
 
-    Fixture { dir, config, clash }
+    Fixture { dir, config }
 }
 
 fn fake_sing_box(dir: &TempDir) -> String {
@@ -191,7 +164,3 @@ async fn once_is_best_effort_when_portal_is_down() {
     assert!(agent.run().await.is_err());
 }
 
-#[allow(dead_code)]
-fn unused(path: PathBuf) -> PathBuf {
-    path
-}

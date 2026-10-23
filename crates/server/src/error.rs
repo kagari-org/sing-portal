@@ -52,7 +52,6 @@ impl ApiError {
             | sing_portal_core::Error::UnsupportedScheme(_) => {
                 ApiError::Unprocessable(error.to_string())
             }
-            other @ sing_portal_core::Error::ClashApi(_) => ApiError::Upstream(other.to_string()),
             other => ApiError::Internal(other.to_string()),
         }
     }

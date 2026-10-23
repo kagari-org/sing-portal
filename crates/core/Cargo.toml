@@ -8,7 +8,6 @@ publish.workspace = true
 base64.workspace = true
 hex.workspace = true
 percent-encoding.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true
@@ -18,5 +17,3 @@ url.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio.workspace = true
-wiremock.workspace = true

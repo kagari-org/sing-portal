@@ -15,14 +15,10 @@ pub enum ServerMessage {
         id: String,
         kind: String,
         tag: String,
-        url: Option<String>,
     },
     Select {
         id: String,
         outbound: String,
-    },
-    Proxies {
-        id: String,
     },
 }
 
@@ -31,8 +27,7 @@ impl ServerMessage {
         match self {
             ServerMessage::Sync { id, .. }
             | ServerMessage::Test { id, .. }
-            | ServerMessage::Select { id, .. }
-            | ServerMessage::Proxies { id } => id,
+            | ServerMessage::Select { id, .. } => id,
         }
     }
 }
@@ -70,10 +65,6 @@ pub enum AgentMessage {
         id: String,
         applied: bool,
     },
-    ProxiesResult {
-        id: String,
-        proxies: Value,
-    },
     Error {
         id: Option<String>,
         message: String,
@@ -86,8 +77,7 @@ impl AgentMessage {
             AgentMessage::Hello { .. } | AgentMessage::Status { .. } => None,
             AgentMessage::SyncResult { id, .. }
             | AgentMessage::TestResult { id, .. }
-            | AgentMessage::SelectResult { id, .. }
-            | AgentMessage::ProxiesResult { id, .. } => Some(id),
+            | AgentMessage::SelectResult { id, .. } => Some(id),
             AgentMessage::Error { id, .. } => id.as_deref(),
         }
     }

@@ -1,5 +1,4 @@
 pub mod canonical;
-pub mod clash_api;
 pub mod clash_yaml;
 pub mod detect;
 pub mod error;

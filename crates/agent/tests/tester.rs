@@ -1,15 +1,12 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde_json::json;
-use sing_portal_agent::tester::{Kind, Tester, TesterConfig, parse_network_quality};
-use sing_portal_core::clash_api::ClashClient;
+use sing_portal_agent::api::BoxApi;
+use sing_portal_agent::tester::{Kind, Tester, TesterConfig};
 use tempfile::TempDir;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn script(dir: &TempDir, body: &str) -> PathBuf {
-    let path = dir.path().join("sing-box");
+fn script(dir: &Path, body: &str) -> PathBuf {
+    let path = dir.join("sing-box");
     std::fs::write(&path, body).unwrap();
     let mut permissions = std::fs::metadata(&path).unwrap().permissions();
     std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
@@ -17,56 +14,22 @@ fn script(dir: &TempDir, body: &str) -> PathBuf {
     path
 }
 
-fn tester(dir: &TempDir, script: PathBuf, api_url: Option<&str>) -> Tester {
+fn tester(script: PathBuf) -> Tester {
     Tester::new(
         TesterConfig {
-            sing_box: script,
-            api_url: api_url.map(ToString::to_string),
+            timeout: Duration::from_secs(3),
             network_quality_runtime: 2,
-            ..Default::default()
+            network_quality_config_url: None,
         },
-        ClashClient::new("http://127.0.0.1:1", Duration::from_secs(2)).unwrap(),
+        BoxApi::new(script, "http://127.0.0.1:1", Duration::from_secs(5)),
     )
-    .unwrap()
-}
-
-#[test]
-fn parses_network_quality_summary() {
-    let output = "==== NETWORK QUALITY TEST ====\rIdle Latency: 114 ms\r\n\
-                  Download Capacity: 12.5 Mbps Accuracy: Medium\r\n\
-                  Download Capacity: 88.0 Mbps Accuracy: High\r\n\
-                  Upload Capacity: 42.0 Mbps Accuracy: High\r\n\
-                  Download Responsiveness: 600 RPM Accuracy: Medium\r\n\
-                  Upload Responsiveness: 520 RPM Accuracy: Low\r\n";
-    let report = parse_network_quality(output);
-    assert_eq!(report.idle_latency_ms, Some(114.0));
-    assert_eq!(report.download_mbps, Some(88.0), "last reading wins");
-    assert_eq!(report.upload_mbps, Some(42.0));
-    assert_eq!(report.download_rpm, Some(600.0));
-    assert_eq!(report.upload_rpm, Some(520.0));
 }
 
 #[tokio::test]
-async fn bandwidth_fails_without_the_api() {
-    let dir = TempDir::new().unwrap();
-    let script = script(&dir, "#!/bin/sh\nexit 0\n");
-    let tester = tester(&dir, script, None);
-
-    let error = tester
-        .measure("node-a", Kind::Bandwidth, None)
-        .await
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("api is not configured"),
-        "unexpected error: {error}"
-    );
-}
-
-#[tokio::test]
-async fn bandwidth_runs_inside_the_daemon() {
+async fn bandwidth_reports_capacities() {
     let dir = TempDir::new().unwrap();
     let script = script(
-        &dir,
+        &dir.path(),
         r#"#!/bin/sh
 case "$1 $2" in
   "api networkquality")
@@ -78,27 +41,14 @@ Download Responsiveness: 600 RPM
 EOF
     ;;
   *)
-    echo "unexpected args: $@" >&2
     exit 1
     ;;
 esac
 "#,
     );
 
-    let clash = MockServer::start().await;
-    let tester = Tester::new(
-        TesterConfig {
-            sing_box: script,
-            api_url: Some(clash.uri()),
-            network_quality_runtime: 2,
-            ..Default::default()
-        },
-        ClashClient::new(&clash.uri(), Duration::from_secs(2)).unwrap(),
-    )
-    .unwrap();
-
-    let measurement = tester
-        .measure("node-a", Kind::Bandwidth, None)
+    let measurement = tester(script)
+        .measure("node-a", Kind::Bandwidth)
         .await
         .unwrap();
     assert_eq!(measurement.kind, "bandwidth");
@@ -109,27 +59,82 @@ esac
 }
 
 #[tokio::test]
-async fn latency_uses_the_clash_delay_api() {
+async fn latency_reads_the_url_test_result() {
     let dir = TempDir::new().unwrap();
-    let script = script(&dir, "#!/bin/sh\nexit 0\n");
-    let clash = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/proxies/node-a/delay"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "delay": 37 })))
-        .mount(&clash)
-        .await;
+    let state = dir.path().to_path_buf();
+    let script = script(
+        &dir.path(),
+        &format!(
+            r#"#!/bin/sh
+case "$1 $2 $3" in
+  "api group urltest") touch {state}/tested ;;
+  "api outbounds"*)
+    if [ -f {state}/tested ]; then
+      printf 'node-a\tdirect\t42 ms\n'
+    else
+      printf 'node-a\tdirect\t-\n'
+    fi
+    ;;
+esac
+"#,
+            state = state.display()
+        ),
+    );
 
-    let tester = Tester::new(
-        TesterConfig {
-            sing_box: script,
-            ..Default::default()
-        },
-        ClashClient::new(&clash.uri(), Duration::from_secs(2)).unwrap(),
-    )
-    .unwrap();
-
-    let measurement = tester.measure("node-a", Kind::Latency, None).await.unwrap();
+    let measurement = tester(script)
+        .measure("node-a", Kind::Latency)
+        .await
+        .unwrap();
     assert_eq!(measurement.kind, "latency");
-    assert_eq!(measurement.latency_ms, Some(37.0));
+    assert_eq!(measurement.latency_ms, Some(42.0));
     assert!(measurement.down_mbps.is_none());
+}
+
+#[tokio::test]
+async fn latency_rejects_tags_outside_the_group() {
+    let dir = TempDir::new().unwrap();
+    let script = script(
+        &dir.path(),
+        r#"#!/bin/sh
+if [ "$1 $2" = "api outbounds" ]; then
+  printf 'other\tdirect\t42 ms\n'
+fi
+"#,
+    );
+
+    let error = tester(script)
+        .measure("node-a", Kind::Latency)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("not part of"), "got {error}");
+}
+
+#[tokio::test]
+async fn latency_reports_a_failed_url_test() {
+    let dir = TempDir::new().unwrap();
+    let state = dir.path().to_path_buf();
+    let script = script(
+        &dir.path(),
+        &format!(
+            r#"#!/bin/sh
+case "$1 $2 $3" in
+  "api group urltest") touch {state}/tested ;;
+  "api outbounds"*)
+    if [ -f {state}/tested ]; then
+      printf 'node-a\tdirect\t-\nnode-b\tdirect\t10 ms\n'
+    else
+      printf 'node-a\tdirect\t20 ms\nnode-b\tdirect\t10 ms\n'
+    fi
+    ;;
+esac
+"#,
+            state = state.display()
+        ),
+    );
+
+    let error = tester(script)
+        .measure("node-a", Kind::Latency)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("url test failed"), "got {error}");
 }

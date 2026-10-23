@@ -11,7 +11,7 @@ pub struct AgentConfig {
     pub config_path: PathBuf,
     pub state_dir: PathBuf,
     pub sing_box_bin: String,
-    pub clash_url: String,
+    pub api_url: String,
     pub restart_cmd: Option<String>,
     pub interval: Duration,
     pub once: bool,

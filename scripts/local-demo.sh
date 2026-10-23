@@ -6,7 +6,6 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 work="${WORKDIR:-$root/.tmp/local}"
 portal_port="${PORTAL_PORT:-3915}"
-clash_port="${CLASH_PORT:-9090}"
 binary="${SING_PORTAL_BIN:-$root/target/debug/sing-portal}"
 portal="http://127.0.0.1:$portal_port"
 
@@ -26,15 +25,13 @@ trap cleanup EXIT
 rm -rf "$work"
 mkdir -p "$work/run" "$work/state" "$work/tmp"
 export TMPDIR="$work/tmp"
+export FAKE_SING_BOX_STATE="$work/state"
 
 json() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(s);const f=process.argv[1].split(".");let o=v;for(const k of f)o=o?.[k];console.log(typeof o==="object"?JSON.stringify(o,null,1):o)})' "$1"
 }
 
-echo "== start mock clash and portal"
-MOCK_CLASH_PORT="$clash_port" node "$root/scripts/mock-clash.mjs" >"$work/clash.log" 2>&1 &
-pids+=($!)
-
+echo "== start the portal"
 "$binary" serve \
   --listen "127.0.0.1:$portal_port" \
   --db "$work/portal.db" \
@@ -57,6 +54,11 @@ curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log({format:j.subscription.format,nodes:j.subscription.outboundCount,validated:j.subscription.validated,warnings:j.warnings.length})})'
 
 echo
+echo "== record the tags the fake sing-box api reports"
+curl -fsS "$portal/api/providers" |
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const tags=JSON.parse(s).flatMap((provider)=>provider.nodes.map((node)=>node.tag));process.stdout.write(tags.join("\n")+"\n")})' >"$work/state/tags"
+
+echo
 echo "== start the agent (it dials the portal and registers itself)"
 "$binary" agent \
   --portal "$portal" \
@@ -65,8 +67,7 @@ echo "== start the agent (it dials the portal and registers itself)"
   --config "$work/run/config.json" \
   --state-dir "$work/state" \
   --sing-box "$root/scripts/fake-sing-box.sh" \
-  --clash "http://127.0.0.1:$clash_port" \
-  --api-url "http://127.0.0.1:19091" \
+  --api-url "http://127.0.0.1:9091" \
   --restart-cmd "" \
   --interval 3s \
   >"$work/agent.log" 2>&1 &

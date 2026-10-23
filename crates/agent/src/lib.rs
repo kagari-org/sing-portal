@@ -1,3 +1,4 @@
+pub mod api;
 pub mod apply;
 pub mod config;
 pub mod error;
@@ -7,7 +8,6 @@ pub mod tester;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use sing_portal_core::clash_api::ClashClient;
 use sing_portal_core::protocol::{AgentMessage, ServerMessage};
 use sing_portal_core::render::SELECTOR_TAG;
 use tokio_tungstenite::tungstenite::Message;
@@ -15,24 +15,20 @@ use url::Url;
 
 pub use config::AgentConfig;
 pub use error::{AgentError, Result};
+use api::BoxApi;
 use tester::{Kind, Tester};
 
 pub struct Agent {
     config: AgentConfig,
-    clash: ClashClient,
+    api: BoxApi,
     tester: Tester,
 }
 
 impl Agent {
     pub fn new(config: AgentConfig) -> Result<Self> {
-        let clash = ClashClient::new(&config.clash_url, Duration::from_secs(5))
-            .map_err(|error| AgentError::Clash(error.to_string()))?;
-        let tester = Tester::new(config.tester.clone(), clash.clone())?;
-        Ok(Self {
-            config,
-            clash,
-            tester,
-        })
+        let api = BoxApi::new(&config.sing_box_bin, config.api_url.clone(), Duration::from_secs(5));
+        let tester = Tester::new(config.tester.clone(), api.clone());
+        Ok(Self { config, api, tester })
     }
 
     pub fn config(&self) -> &AgentConfig {
@@ -124,14 +120,14 @@ impl Agent {
                 selection,
                 outbounds,
             } => self.sync(id, revision, selection, outbounds).await,
-            ServerMessage::Test { id, kind, tag, url } => {
+            ServerMessage::Test { id, kind, tag } => {
                 let Some(kind) = Kind::parse(&kind) else {
                     return AgentMessage::Error {
                         id: Some(id),
                         message: format!("unknown test kind `{kind}`"),
                     };
                 };
-                match self.tester.measure(&tag, kind, url.as_deref()).await {
+                match self.tester.measure(&tag, kind).await {
                     Ok(measurement) => AgentMessage::TestResult {
                         id,
                         kind: measurement.kind,
@@ -147,7 +143,7 @@ impl Agent {
                 }
             }
             ServerMessage::Select { id, outbound } => {
-                match self.clash.select(SELECTOR_TAG, &outbound).await {
+                match self.api.select(SELECTOR_TAG, &outbound).await {
                     Ok(()) => AgentMessage::SelectResult { id, applied: true },
                     Err(error) => AgentMessage::Error {
                         id: Some(id),
@@ -155,13 +151,6 @@ impl Agent {
                     },
                 }
             }
-            ServerMessage::Proxies { id } => match self.clash.proxies().await {
-                Ok(proxies) => AgentMessage::ProxiesResult { id, proxies },
-                Err(error) => AgentMessage::Error {
-                    id: Some(id),
-                    message: error.to_string(),
-                },
-            },
         }
     }
 
@@ -181,7 +170,7 @@ impl Agent {
         if empty {
             health = "no_active_subscriptions".to_string();
         } else if revision != local.applied_revision {
-            match apply::apply(&self.config, &outbounds, &self.clash).await {
+            match apply::apply(&self.config, &outbounds, &self.api).await {
                 Ok(()) => {
                     local.applied_revision = revision.clone();
                     applied = true;
@@ -195,7 +184,7 @@ impl Agent {
 
         if health == "ok" || empty {
             let tags = apply::tags_of(&outbounds);
-            match apply::apply_selection(&self.clash, &selection, &tags).await {
+            match apply::apply_selection(&self.api, &selection, &tags).await {
                 Ok(selection) => local.applied_selection = selection,
                 Err(selection_error) => {
                     health = "degraded".to_string();
@@ -225,7 +214,7 @@ impl Agent {
     async fn status(&self) -> AgentMessage {
         let local = state::load(&self.config.local_state_path()).await;
         let selection = self
-            .clash
+            .api
             .current_selection()
             .await
             .unwrap_or_else(|_| local.applied_selection.clone());

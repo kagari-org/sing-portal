@@ -1,6 +1,6 @@
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE subscriptions (
+CREATE TABLE IF NOT EXISTS subscriptions (
     id                    TEXT PRIMARY KEY,
     name                  TEXT NOT NULL,
     slug                  TEXT NOT NULL UNIQUE,
@@ -22,15 +22,16 @@ CREATE TABLE subscriptions (
     updated_at            INTEGER NOT NULL
 );
 
-CREATE INDEX idx_subscriptions_next_refresh ON subscriptions (auto_refresh, next_refresh_at);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_next_refresh ON subscriptions (auto_refresh, next_refresh_at);
 
-CREATE TABLE selections (
+CREATE TABLE IF NOT EXISTS selections (
     node_name  TEXT PRIMARY KEY,
     outbound   TEXT NOT NULL,
+    mode       TEXT NOT NULL DEFAULT 'manual',
     updated_at INTEGER NOT NULL
 );
 
-CREATE TABLE node_reports (
+CREATE TABLE IF NOT EXISTS node_reports (
     node_name   TEXT PRIMARY KEY,
     revision    TEXT NOT NULL DEFAULT '',
     selection   TEXT NOT NULL DEFAULT '',
@@ -39,7 +40,19 @@ CREATE TABLE node_reports (
     reported_at INTEGER NOT NULL
 );
 
-CREATE TABLE audit_log (
+CREATE TABLE IF NOT EXISTS measurements (
+    node_name   TEXT NOT NULL,
+    tag         TEXT NOT NULL,
+    latency_ms  REAL,
+    down_mbps   REAL,
+    score       REAL NOT NULL,
+    measured_at INTEGER NOT NULL,
+    PRIMARY KEY (node_name, tag)
+);
+
+CREATE INDEX IF NOT EXISTS idx_measurements_node ON measurements (node_name);
+
+CREATE TABLE IF NOT EXISTS audit_log (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
     at     INTEGER NOT NULL,
     actor  TEXT NOT NULL,
@@ -48,4 +61,4 @@ CREATE TABLE audit_log (
     detail TEXT NOT NULL DEFAULT ''
 );
 
-CREATE INDEX idx_audit_log_at ON audit_log (at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log (at DESC);

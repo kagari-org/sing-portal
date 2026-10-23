@@ -66,16 +66,6 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<NodeView>
     Ok(Json(views))
 }
 
-pub async fn proxies(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> ApiResult<Json<Value>> {
-    if !service::is_known_machine(&state, &name).await {
-        return Err(ApiError::NotFound(format!("unknown machine {name}")));
-    }
-    Ok(Json(service::proxies(&state, &name).await?))
-}
-
 #[derive(Deserialize)]
 pub struct SelectionRequest {
     pub outbound: String,
@@ -247,7 +237,6 @@ async fn spawn_evaluation(state: &AppState, name: &str) -> Value {
 pub struct TestRequest {
     pub tag: String,
     pub kind: Option<String>,
-    pub url: Option<String>,
 }
 
 pub async fn test(
@@ -275,6 +264,6 @@ pub async fn test(
     }
 
     Ok(Json(
-        service::probe(&state, &name, &request.tag, kind, request.url.as_deref()).await?,
+        service::probe(&state, &name, &request.tag, kind).await?,
     ))
 }

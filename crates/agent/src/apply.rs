@@ -38,7 +38,7 @@ async fn restart(config: &AgentConfig) -> Result<()> {
         return Ok(());
     };
 
-    let output = tokio::process::Command::new("sh")
+    let output = tokio::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(command)
         .output()

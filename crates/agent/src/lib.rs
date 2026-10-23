@@ -251,21 +251,55 @@ fn serialize(message: &AgentMessage) -> Result<String> {
 fn websocket_url(portal: &str) -> Result<Url> {
     let mut url = Url::parse(portal)
         .map_err(|error| AgentError::Portal(format!("invalid portal url: {error}")))?;
-    let scheme = match url.scheme().to_string().as_str() {
-        "http" => "ws".to_string(),
-        "https" => "wss".to_string(),
-        "ws" | "wss" => url.scheme().to_string(),
+
+    let current = url.scheme().to_string();
+    let scheme = match current.as_str() {
+        "http" => "ws",
+        "https" => "wss",
+        "ws" | "wss" => current.as_str(),
         other => {
             return Err(AgentError::Portal(format!(
                 "unsupported portal scheme `{other}`"
             )));
         }
     };
-    url.set_scheme(&scheme)
-        .map_err(|()| AgentError::Portal("cannot set websocket scheme".into()))?;
-    url.set_path("/api/v1/agent/ws");
+    if scheme != current {
+        url.set_scheme(scheme)
+            .map_err(|()| AgentError::Portal("cannot set websocket scheme".into()))?;
+    }
+
+    if url.path().is_empty() || url.path() == "/" {
+        url.set_path("/api/v1/agent/ws");
+    }
     url.set_query(None);
     Ok(url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::websocket_url;
+
+    #[test]
+    fn accepts_ws_and_http_portal_urls() {
+        assert_eq!(
+            websocket_url("ws://10.11.0.3:3015").unwrap().as_str(),
+            "ws://10.11.0.3:3015/api/v1/agent/ws"
+        );
+        assert_eq!(
+            websocket_url("wss://portal.example.com").unwrap().as_str(),
+            "wss://portal.example.com/api/v1/agent/ws"
+        );
+        assert_eq!(
+            websocket_url("http://10.11.0.3:3015").unwrap().as_str(),
+            "ws://10.11.0.3:3015/api/v1/agent/ws"
+        );
+        assert_eq!(
+            websocket_url("ws://10.11.0.3:3015/custom/ws")
+                .unwrap()
+                .as_str(),
+            "ws://10.11.0.3:3015/custom/ws"
+        );
+    }
 }
 
 fn unix_now() -> i64 {

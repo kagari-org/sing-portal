@@ -1872,6 +1872,7 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "prost",
+ "reqwest",
  "serde",
  "serde_json",
  "sing-portal-core",

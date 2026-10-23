@@ -126,16 +126,27 @@ struct AgentArgs {
 
     #[arg(
         long,
-        env = "SING_PORTAL_TEST_NQ_RUNTIME",
-        default_value_t = 8
+        env = "SING_PORTAL_TEST_INBOUND",
+        default_value = "127.0.0.1:7899"
     )]
-    test_nq_runtime: u64,
+    test_inbound: std::net::SocketAddr,
+
+    #[arg(
+        long,
+        env = "SING_PORTAL_TEST_DOWNLOAD_URL",
+        default_value = "https://speed.cloudflare.com/__down?bytes=26214400"
+    )]
+    test_download_url: String,
+
+    #[arg(
+        long,
+        env = "SING_PORTAL_TEST_MAX_BYTES",
+        default_value_t = 5 * 1024 * 1024
+    )]
+    test_max_bytes: u64,
 
     #[arg(long, env = "SING_PORTAL_API_URL")]
     api_url: String,
-
-    #[arg(long, env = "SING_PORTAL_TEST_NQ_CONFIG_URL")]
-    test_nq_config_url: Option<String>,
 }
 
 #[tokio::main]
@@ -212,8 +223,9 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         health_timeout: parse_duration(&args.health_timeout).map_err(anyhow::Error::msg)?,
         tester: sing_portal_agent::tester::TesterConfig {
             timeout: parse_duration(&args.test_timeout).map_err(anyhow::Error::msg)?,
-            network_quality_runtime: args.test_nq_runtime,
-            network_quality_config_url: args.test_nq_config_url,
+            inbound: args.test_inbound,
+            download_url: args.test_download_url,
+            max_bytes: args.test_max_bytes,
         },
     };
 

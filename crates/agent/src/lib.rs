@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use sing_portal_core::protocol::{AgentMessage, ServerMessage};
-use sing_portal_core::render::{render, to_bytes};
 use sing_portal_core::render::SELECTOR_TAG;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
@@ -17,6 +16,8 @@ use url::Url;
 pub use config::AgentConfig;
 pub use error::{AgentError, Result};
 use api::BoxApi;
+
+const RENDERER_VERSION: u32 = 2;
 use tester::{Kind, Tester};
 
 pub struct Agent {
@@ -71,16 +72,10 @@ impl Agent {
         {
             return;
         }
-        let Ok(template_bytes) = tokio::fs::read(&self.config.template_path).await else {
+        let Ok(bytes) = apply::render_bytes(&self.config, &[]).await else {
             return;
         };
-        let Ok(template) = serde_json::from_slice::<serde_json::Value>(&template_bytes) else {
-            return;
-        };
-        let Ok(config) = render(&template, &[], &self.config.latency_url) else {
-            return;
-        };
-        if let Err(error) = state::write_atomic(&self.config.config_path, &to_bytes(&config)).await {
+        if let Err(error) = state::write_atomic(&self.config.config_path, &bytes).await {
             tracing::warn!(%error, "cannot write the initial config");
         }
     }
@@ -207,13 +202,21 @@ impl Agent {
             .unwrap_or(false);
         // the rendered config embeds the latency url; re-render when it changes
         let latency_url_changed = local.applied_latency_url != self.config.latency_url;
+        // the agent controls parts of the rendered config (test inbound), so a
+        // renderer change must be re-applied even when the revision is stable
+        let renderer_changed = local.applied_renderer_version != RENDERER_VERSION;
         if empty {
             health = "no_active_subscriptions".to_string();
-        } else if revision != local.applied_revision || config_missing || latency_url_changed {
+        } else if revision != local.applied_revision
+            || config_missing
+            || latency_url_changed
+            || renderer_changed
+        {
             match apply::apply(&self.config, &outbounds, &self.api).await {
                 Ok(()) => {
                     local.applied_revision = revision.clone();
                     local.applied_latency_url = self.config.latency_url.clone();
+                    local.applied_renderer_version = RENDERER_VERSION;
                     applied = true;
                 }
                 Err(apply_error) => {

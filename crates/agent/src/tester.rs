@@ -1,8 +1,9 @@
+use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use std::sync::Arc;
-
+use sing_portal_core::render::TEST_SELECTOR;
 use tokio::sync::Mutex;
 
 use crate::api::BoxApi;
@@ -37,16 +38,18 @@ impl Kind {
 #[derive(Debug, Clone)]
 pub struct TesterConfig {
     pub timeout: Duration,
-    pub network_quality_runtime: u64,
-    pub network_quality_config_url: Option<String>,
+    pub inbound: SocketAddr,
+    pub download_url: String,
+    pub max_bytes: u64,
 }
 
 impl Default for TesterConfig {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(20),
-            network_quality_runtime: 8,
-            network_quality_config_url: None,
+            inbound: SocketAddr::from(([127, 0, 0, 1], 7899)),
+            download_url: "https://speed.cloudflare.com/__down?bytes=26214400".to_string(),
+            max_bytes: 5 * 1024 * 1024,
         }
     }
 }
@@ -74,43 +77,35 @@ impl Measurement {
         }
     }
 
-    fn bandwidth(tag: &str, report: &NetworkQuality) -> Self {
+    fn bandwidth(tag: &str, down_mbps: f64) -> Self {
         Self {
             tag: tag.to_string(),
             kind: Kind::Bandwidth.as_str().to_string(),
-            latency_ms: report.idle_latency_ms,
-            down_mbps: report.download_mbps,
-            up_mbps: report.upload_mbps,
-            responsiveness: report.download_rpm,
+            latency_ms: None,
+            down_mbps: Some(down_mbps),
+            up_mbps: None,
+            responsiveness: None,
         }
     }
 
-    fn both(tag: &str, latency_ms: f64, report: &NetworkQuality) -> Self {
+    fn both(tag: &str, latency_ms: f64, down_mbps: f64) -> Self {
         Self {
             tag: tag.to_string(),
             kind: Kind::Both.as_str().to_string(),
             latency_ms: Some(latency_ms),
-            down_mbps: report.download_mbps,
-            up_mbps: report.upload_mbps,
-            responsiveness: report.download_rpm,
+            down_mbps: Some(down_mbps),
+            up_mbps: None,
+            responsiveness: None,
         }
     }
-}
-
-#[derive(Debug, Default, PartialEq)]
-pub struct NetworkQuality {
-    pub idle_latency_ms: Option<f64>,
-    pub download_mbps: Option<f64>,
-    pub upload_mbps: Option<f64>,
-    pub download_rpm: Option<f64>,
-    pub upload_rpm: Option<f64>,
 }
 
 #[derive(Clone)]
 pub struct Tester {
     config: TesterConfig,
     api: BoxApi,
-    quality_lock: Arc<Mutex<()>>,
+    // the download test uses one inbound and one selector, keep it serialised
+    download_lock: Arc<Mutex<()>>,
 }
 
 impl Tester {
@@ -118,7 +113,7 @@ impl Tester {
         Self {
             config,
             api,
-            quality_lock: Arc::new(Mutex::new(())),
+            download_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -126,16 +121,11 @@ impl Tester {
         match kind {
             // latency probes only trigger url tests, they can run concurrently
             Kind::Latency => Ok(Measurement::latency(tag, self.latency(tag).await?)),
-            Kind::Bandwidth => {
-                let _guard = self.quality_lock.lock().await;
-                let report = self.quality(tag).await?;
-                Ok(Measurement::bandwidth(tag, &report))
-            }
+            Kind::Bandwidth => Ok(Measurement::bandwidth(tag, self.download(tag).await?)),
             Kind::Both => {
                 let latency = self.latency(tag).await?;
-                let _guard = self.quality_lock.lock().await;
-                let report = self.quality(tag).await?;
-                Ok(Measurement::both(tag, latency, &report))
+                let down = self.download(tag).await?;
+                Ok(Measurement::both(tag, latency, down))
             }
         }
     }
@@ -180,32 +170,70 @@ impl Tester {
         }
     }
 
-    async fn quality(&self, tag: &str) -> Result<NetworkQuality> {
-        let progress = self
-            .api
-            .network_quality(
-                tag,
-                self.config.network_quality_runtime,
-                self.config.network_quality_config_url.as_deref(),
-            )
-            .await?;
+    /// Bounded single-stream download through the dedicated test selector.
+    /// When the deadline hits, whatever arrived so far is used for the rate,
+    /// so slow nodes still produce a (low) number instead of a failure.
+    async fn download(&self, tag: &str) -> Result<f64> {
+        let _guard = self.download_lock.lock().await;
+        self.api.select(TEST_SELECTOR, tag).await?;
 
-        let report = NetworkQuality {
-            idle_latency_ms: (progress.idle_latency_ms > 0).then(|| progress.idle_latency_ms as f64),
-            download_mbps: (progress.download_capacity > 0)
-                .then(|| progress.download_capacity as f64 / 1_000_000.0),
-            upload_mbps: (progress.upload_capacity > 0)
-                .then(|| progress.upload_capacity as f64 / 1_000_000.0),
-            download_rpm: (progress.download_rpm > 0).then(|| progress.download_rpm as f64),
-            upload_rpm: (progress.upload_rpm > 0).then(|| progress.upload_rpm as f64),
-        };
+        let proxy = format!("http://{}", self.config.inbound);
+        let proxy = reqwest::Proxy::all(&proxy)
+            .map_err(|error| AgentError::Measure(format!("invalid test inbound: {error}")))?;
+        let client = reqwest::Client::builder()
+            .proxy(proxy)
+            .build()
+            .map_err(|error| AgentError::Measure(format!("cannot build downloader: {error}")))?;
 
-        if report.download_mbps.is_none() && report.upload_mbps.is_none() {
-            return Err(AgentError::Measure(
-                "network quality test reported no capacity".into(),
-            ));
+        let started = Instant::now();
+        let deadline = started + self.config.timeout;
+        let mut response = client
+            .get(&self.config.download_url)
+            .send()
+            .await
+            .map_err(|error| AgentError::Measure(format!("download failed: {error}")))?;
+        if !response.status().is_success() {
+            return Err(AgentError::Measure(format!(
+                "download failed: http {}",
+                response.status()
+            )));
         }
-        Ok(report)
+
+        let mut first_byte: Option<Instant> = None;
+        let mut bytes = 0u64;
+        loop {
+            if bytes >= self.config.max_bytes {
+                break;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, response.chunk()).await {
+                Ok(Ok(Some(chunk))) => {
+                    first_byte.get_or_insert_with(Instant::now);
+                    bytes += chunk.len() as u64;
+                }
+                Ok(Ok(None)) => break,
+                Ok(Err(error)) => {
+                    if bytes == 0 {
+                        return Err(AgentError::Measure(format!("download failed: {error}")));
+                    }
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+
+        if bytes == 0 {
+            return Err(AgentError::Measure("download returned no data".into()));
+        }
+
+        let seconds = first_byte
+            .map(|start| start.elapsed().as_secs_f64())
+            .unwrap_or_else(|| started.elapsed().as_secs_f64())
+            .max(0.05);
+        Ok(bytes as f64 * 8.0 / seconds / 1_000_000.0)
     }
 }
 

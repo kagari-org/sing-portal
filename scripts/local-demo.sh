@@ -120,7 +120,7 @@ EOF
   --state-dir "$work/state" \
   --api-url "http://127.0.0.1:$api_port" \
   --latency-url "$portal/api/healthz" \
-  --test-nq-runtime 3 \
+  --test-max-bytes 2097152 \
   --restart-cmd "kill -HUP \$(cat $work/box.pid)" \
   --interval 3s \
   >"$work/agent.log" 2>&1 &
@@ -158,7 +158,7 @@ curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
   --data @"$work/payload.json" "$portal/api/nodes/home/test"
 echo
 
-echo "== bandwidth test through gRPC networkquality ($selected)"
+echo "== bandwidth test through the test inbound ($selected)"
 node -e 'process.stdout.write(JSON.stringify({ tag: process.argv[1], kind: "bandwidth" }))' "$selected" >"$work/payload.json"
 curl -sS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
   --data @"$work/payload.json" "$portal/api/nodes/home/test" || true

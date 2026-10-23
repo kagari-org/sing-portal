@@ -6,6 +6,8 @@ use crate::model::{is_proxy_outbound, outbound_tag};
 pub const SELECTOR_TAG: &str = "s_out";
 pub const AUTO_TAG: &str = "s_auto";
 pub const DIRECT_TAG: &str = "s_direct";
+pub const TEST_SELECTOR: &str = "s_test";
+pub const TEST_INBOUND_TAG: &str = "s_test-in";
 
 pub fn render(template: &Value, outbounds: &[Value], test_url: &str) -> Result<Value, Error> {
     let mut config = template

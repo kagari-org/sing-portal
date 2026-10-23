@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use sing_portal_core::render::SELECTOR_TAG;
 use tokio::sync::RwLock;
@@ -15,9 +15,7 @@ pub mod daemon {
 }
 
 use daemon::started_service_client::StartedServiceClient;
-use daemon::{
-    NetworkQualityTestRequest, NetworkQualityTestProgress, SelectOutboundRequest, UrlTestRequest,
-};
+use daemon::{SelectOutboundRequest, UrlTestRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutboundState {
@@ -168,45 +166,4 @@ impl BoxApi {
             .collect())
     }
 
-    pub async fn network_quality(
-        &self,
-        tag: &str,
-        runtime: u64,
-        config_url: Option<&str>,
-    ) -> Result<NetworkQualityTestProgress> {
-        let mut client = self.client().await;
-        let request = NetworkQualityTestRequest {
-            config_url: config_url.unwrap_or_default().to_string(),
-            outbound_tag: tag.to_string(),
-            serial: false,
-            max_runtime_seconds: runtime as i32,
-            http3: false,
-        };
-        let mut stream = self
-            .wait(self.timeout, client.start_network_quality_test(request))
-            .await?
-            .into_inner();
-
-        let deadline = Instant::now() + Duration::from_secs(runtime.max(1) + 30);
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(AgentError::BoxApi(
-                    "network quality test did not finish in time".into(),
-                ));
-            }
-            let progress = self
-                .wait(remaining, stream.message())
-                .await?
-                .ok_or_else(|| {
-                    AgentError::BoxApi("sing-box closed the quality stream".into())
-                })?;
-            if !progress.error.is_empty() {
-                return Err(AgentError::BoxApi(progress.error));
-            }
-            if progress.is_final {
-                return Ok(progress);
-            }
-        }
-    }
 }

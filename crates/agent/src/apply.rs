@@ -1,8 +1,10 @@
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
-use sing_portal_core::model::outbound_tag;
-use sing_portal_core::render::{AUTO_TAG, DIRECT_TAG, SELECTOR_TAG, render, to_bytes};
+use serde_json::{Value, json};
+use sing_portal_core::model::{is_proxy_outbound, outbound_tag};
+use sing_portal_core::render::{
+    AUTO_TAG, DIRECT_TAG, SELECTOR_TAG, TEST_INBOUND_TAG, TEST_SELECTOR, render, to_bytes,
+};
 
 use crate::api::BoxApi;
 use crate::config::AgentConfig;
@@ -16,7 +18,7 @@ pub async fn apply(config: &AgentConfig, outbounds: &[Value], api: &BoxApi) -> R
     }
     state::write_atomic(&outbounds_path, &serde_json::to_vec_pretty(outbounds)?).await?;
 
-    let bytes = render_config(config, outbounds).await?;
+    let bytes = render_bytes(config, outbounds).await?;
     state::write_atomic(&config.config_path, &bytes).await?;
 
     if let Err(error) = restart(config).await {
@@ -90,16 +92,81 @@ async fn rollback(config: &AgentConfig, api: &BoxApi) -> Result<()> {
         &serde_json::to_vec_pretty(&outbounds)?,
     )
     .await?;
-    let bytes = render_config(config, &outbounds).await?;
+    let bytes = render_bytes(config, &outbounds).await?;
     state::write_atomic(&config.config_path, &bytes).await?;
     restart(config).await?;
     wait_healthy(config, api).await
 }
 
-async fn render_config(config: &AgentConfig, outbounds: &[Value]) -> Result<Vec<u8>> {
+pub async fn render_bytes(config: &AgentConfig, outbounds: &[Value]) -> Result<Vec<u8>> {
     let template_bytes = tokio::fs::read(&config.template_path).await?;
     let template: Value = serde_json::from_slice(&template_bytes)?;
-    Ok(to_bytes(&render(&template, outbounds, &config.latency_url)?))
+    let mut rendered = render(&template, outbounds, &config.latency_url)?;
+    inject_test(&mut rendered, config, outbounds)?;
+    Ok(to_bytes(&rendered))
+}
+
+/// The bandwidth probe dials its own inbound with the test selector selected,
+/// so it never touches the real egress selector.
+fn inject_test(config: &mut Value, agent: &AgentConfig, outbounds: &[Value]) -> Result<()> {
+    let already = config
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .any(|outbound| outbound_tag(outbound).as_deref() == Some(TEST_SELECTOR))
+        })
+        .unwrap_or(false);
+    if already {
+        return Ok(());
+    }
+
+    let tags: Vec<Value> = outbounds
+        .iter()
+        .filter(|outbound| is_proxy_outbound(outbound))
+        .filter_map(|outbound| outbound_tag(outbound).map(Value::from))
+        .collect();
+    if tags.is_empty() {
+        return Ok(());
+    }
+    let default = tags.first().cloned().unwrap_or(Value::Null);
+
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| AgentError::Template("rendered config is not an object".into()))?;
+
+    let inbounds = root.entry("inbounds").or_insert_with(|| json!([]));
+    if let Some(array) = inbounds.as_array_mut() {
+        array.push(json!({
+            "type": "mixed",
+            "tag": TEST_INBOUND_TAG,
+            "listen": agent.tester.inbound.ip().to_string(),
+            "listen_port": agent.tester.inbound.port(),
+        }));
+    }
+
+    let list = root.entry("outbounds").or_insert_with(|| json!([]));
+    if let Some(array) = list.as_array_mut() {
+        array.push(json!({
+            "type": "selector",
+            "tag": TEST_SELECTOR,
+            "outbounds": tags,
+            "default": default,
+        }));
+    }
+
+    let route = root.entry("route").or_insert_with(|| json!({ "rules": [] }));
+    if let Some(route) = route.as_object_mut() {
+        let rules = route.entry("rules").or_insert_with(|| json!([]));
+        if let Some(array) = rules.as_array_mut() {
+            array.insert(
+                0,
+                json!({ "inbound": [TEST_INBOUND_TAG], "outbound": TEST_SELECTOR }),
+            );
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn apply_selection(api: &BoxApi, desired: &str, tags: &[String]) -> Result<String> {

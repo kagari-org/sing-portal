@@ -94,7 +94,10 @@ async fn syncs_state_over_websocket() {
         once: true,
         best_effort: false,
         health_timeout: Duration::from_secs(5),
-        tester: sing_portal_agent::tester::TesterConfig::default(),
+        tester: sing_portal_agent::tester::TesterConfig {
+            inbound: std::net::SocketAddr::from(([127, 0, 0, 1], common::free_port())),
+            ..sing_portal_agent::tester::TesterConfig::default()
+        },
     };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -206,7 +209,10 @@ async fn minimal_config() -> AgentConfig {
         once: true,
         best_effort: false,
         health_timeout: Duration::from_millis(500),
-        tester: sing_portal_agent::tester::TesterConfig::default(),
+        tester: sing_portal_agent::tester::TesterConfig {
+            inbound: std::net::SocketAddr::from(([127, 0, 0, 1], common::free_port())),
+            ..sing_portal_agent::tester::TesterConfig::default()
+        },
     };
     config
 }

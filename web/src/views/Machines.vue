@@ -9,6 +9,7 @@ import {
   NSwitch,
   NTag,
   NText,
+  useDialog,
   useMessage,
   type DataTableColumns,
 } from 'naive-ui'
@@ -17,6 +18,7 @@ import { usePortalStore } from '../stores/portal'
 
 const store = usePortalStore()
 const message = useMessage()
+const dialog = useDialog()
 const busy = ref<string | null>(null)
 const latency = ref<Record<string, number | null>>({})
 
@@ -160,7 +162,24 @@ function healthType(health: string): 'success' | 'warning' | 'error' | 'default'
 }
 
 async function setMode(machine: Machine, auto: boolean) {
-  if (auto === (machine.mode === 'auto')) return
+  const current = store.machines.find((entry) => entry.name === machine.name)
+  if (!current || auto === (current.mode === 'auto')) return
+
+  if (!auto) {
+    dialog.warning({
+      title: 'Turn off automatic selection?',
+      content: `${machine.name} will keep its current egress until you pick one manually.`,
+      positiveText: 'Turn off',
+      negativeText: 'Keep auto',
+      onPositiveClick: () => applyMode(machine, false),
+    })
+    return
+  }
+
+  applyMode(machine, true)
+}
+
+async function applyMode(machine: Machine, auto: boolean) {
   try {
     await api.setMode(machine.name, auto ? 'auto' : 'manual')
     message.success(`${machine.name}: ${auto ? 'auto' : 'manual'} selection`)

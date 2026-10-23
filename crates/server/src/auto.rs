@@ -196,16 +196,6 @@ pub async fn evaluate_machine(state: &AppState, machine: &str) -> ApiResult<Opti
         || should_switch(best_score, current_score, state.config().auto_margin);
 
     if switch {
-        let still_auto = state
-            .store()
-            .selection_with_mode(machine)
-            .await?
-            .is_some_and(|selection| selection.mode == SelectionMode::Auto);
-        if !still_auto {
-            tracing::info!(%machine, "selection mode changed during evaluation, keeping the manual choice");
-            return Ok(None);
-        }
-
         let applied = service::select(state, machine, &best_tag)
             .await
             .unwrap_or(false);

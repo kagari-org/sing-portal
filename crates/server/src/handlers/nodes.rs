@@ -163,24 +163,11 @@ pub async fn set_mode(
         ApiError::BadRequest(format!("unsupported selection mode `{}`", request.mode))
     })?;
 
-    let previous = state
-        .store()
-        .selection_with_mode(&name)
-        .await?
-        .map(|selection| selection.mode.as_str().to_string())
-        .unwrap_or_else(|| "none".to_string());
-
     state.store().set_selection_mode(&name, mode).await?;
     state
         .store()
-        .record_audit(
-            "ui",
-            "selection.mode",
-            &name,
-            &format!("{previous} -> {}", mode.as_str()),
-        )
+        .record_audit("ui", "selection.mode", &name, mode.as_str())
         .await?;
-    tracing::info!(%name, %previous, mode = mode.as_str(), "selection mode changed");
 
     if let Err(error) = service::push_state(&state, &name).await {
         tracing::warn!(%name, %error, "cannot push selection mode to agent");

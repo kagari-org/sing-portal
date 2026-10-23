@@ -15,10 +15,7 @@ use crate::{service, state::AppState};
 
 pub async fn healthz(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     state.store().healthz().await?;
-    Ok(Json(json!({
-        "status": "ok",
-        "version": env!("CARGO_PKG_VERSION"),
-    })))
+    Ok(Json(json!({ "status": "ok" })))
 }
 
 pub async fn revision(State(state): State<AppState>) -> ApiResult<Json<RevisionView>> {

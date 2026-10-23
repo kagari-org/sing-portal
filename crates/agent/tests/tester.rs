@@ -6,6 +6,42 @@ use sing_portal_core::clash_api::ClashClient;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[tokio::test]
+async fn combined_probe_reports_latency_and_bandwidth() {
+    let proxy = StubProxy::start(256 * 1024).await;
+
+    let clash = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/proxies/s_out"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "now": "previous" })))
+        .mount(&clash)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/proxies/s_out"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&clash)
+        .await;
+
+    let tester = Tester::new(
+        TesterConfig {
+            proxy_inbound: proxy.url(),
+            latency_url: "http://probe.invalid/".to_string(),
+            download_url: "http://speed.invalid/payload".to_string(),
+            max_bytes: 256 * 1024,
+            timeout: Duration::from_secs(5),
+        },
+        ClashClient::new(&clash.uri(), Duration::from_secs(5)).unwrap(),
+    )
+    .unwrap();
+
+    let measurement = tester.measure("node-a", Kind::Both, None).await.unwrap();
+    assert_eq!(measurement.kind, "both");
+    assert!(measurement.latency_ms.is_some());
+    assert_eq!(measurement.bytes, Some(256 * 1024));
+    assert!(measurement.down_mbps.unwrap() > 0.0);
+    assert_eq!(measurement.restored, "previous");
+}
+
 #[test]
 fn bandwidth_math() {
     assert_eq!(down_mbps(0, 1.0), 0.0);

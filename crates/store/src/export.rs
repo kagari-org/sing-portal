@@ -59,10 +59,11 @@ impl Store {
             .await?;
         for selection in &snapshot.selections {
             sqlx::query(
-                "INSERT INTO selections (node_name, outbound, updated_at) VALUES (?, ?, ?)",
+                "INSERT INTO selections (node_name, outbound, mode, updated_at) VALUES (?, ?, ?, ?)",
             )
             .bind(&selection.node_name)
             .bind(&selection.outbound)
+            .bind(selection.mode.as_str())
             .bind(selection.updated_at)
             .execute(&mut *transaction)
             .await?;

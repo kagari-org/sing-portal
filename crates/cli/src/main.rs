@@ -59,6 +59,24 @@ struct ServeArgs {
 
     #[arg(long, env = "SING_PORTAL_TEST_PORT", default_value_t = 3016)]
     test_port: u16,
+
+    #[arg(long, env = "SING_PORTAL_AUTO_INTERVAL", default_value = "10m")]
+    auto_interval: String,
+
+    #[arg(long, env = "SING_PORTAL_AUTO_CANDIDATES", default_value_t = 5)]
+    auto_candidates: usize,
+
+    #[arg(long, env = "SING_PORTAL_AUTO_MARGIN", default_value_t = 0.15)]
+    auto_margin: f64,
+
+    #[arg(long, env = "SING_PORTAL_AUTO_LAT_REF", default_value_t = 60.0)]
+    auto_lat_ref: f64,
+
+    #[arg(long, env = "SING_PORTAL_AUTO_BW_REF", default_value_t = 20.0)]
+    auto_bw_ref: f64,
+
+    #[arg(long, env = "SING_PORTAL_AUTO_BW_FLOOR", default_value_t = 0.5)]
+    auto_bw_floor: f64,
 }
 
 #[derive(Args)]
@@ -184,6 +202,14 @@ async fn serve(args: ServeArgs) -> Result<()> {
         static_dir: args.static_dir,
         embed_web: true,
         test_port: args.test_port,
+        auto_interval: parse_duration(&args.auto_interval).map_err(anyhow::Error::msg)?,
+        auto_candidates: args.auto_candidates,
+        auto_margin: args.auto_margin,
+        score: sing_portal_core::score::ScoreConfig {
+            latency_ref_ms: args.auto_lat_ref,
+            bandwidth_ref_mbps: args.auto_bw_ref,
+            bandwidth_floor: args.auto_bw_floor,
+        },
     };
 
     let state = AppState::new(config)
@@ -194,7 +220,9 @@ async fn serve(args: ServeArgs) -> Result<()> {
         .context("cannot initialise node selections")?;
 
     let scheduler = tokio::spawn(sing_portal_server::scheduler::run(state.clone()));
+    let auto = tokio::spawn(sing_portal_server::auto::run(state.clone()));
     let result = sing_portal_server::serve(state).await;
+    auto.abort();
     scheduler.abort();
     result.context("portal server failed")?;
     Ok(())

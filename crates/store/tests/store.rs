@@ -1,5 +1,5 @@
 use sing_portal_store::{
-    NewSubscription, NodeReport, Source, Store, SubscriptionPatch,
+    Measurement, NewSubscription, NodeReport, SelectionMode, Source, Store, SubscriptionPatch,
 };
 use tempfile::TempDir;
 
@@ -146,6 +146,46 @@ async fn selections_and_reports() {
     );
     store.seed_selection("cola", "s_auto").await.unwrap();
     assert_eq!(store.selections().await.unwrap().len(), 2);
+
+    assert_eq!(
+        store.selection_with_mode("cola").await.unwrap().unwrap().mode,
+        SelectionMode::Auto
+    );
+    store.set_selection("cola", "node-2").await.unwrap();
+    assert_eq!(
+        store.selection_with_mode("cola").await.unwrap().unwrap().mode,
+        SelectionMode::Auto,
+        "applying a selection keeps the mode"
+    );
+    store.set_selection_mode("cola", SelectionMode::Manual).await.unwrap();
+    assert_eq!(
+        store.selection_with_mode("cola").await.unwrap().unwrap().mode,
+        SelectionMode::Manual
+    );
+
+    let measurements = vec![
+        Measurement {
+            node_name: "cola".into(),
+            tag: "a".into(),
+            latency_ms: Some(30.0),
+            down_mbps: Some(5.0),
+            score: 89.1,
+            measured_at: 10,
+        },
+        Measurement {
+            node_name: "cola".into(),
+            tag: "b".into(),
+            latency_ms: Some(120.0),
+            down_mbps: None,
+            score: 61.8,
+            measured_at: 10,
+        },
+    ];
+    store.replace_measurements("cola", &measurements).await.unwrap();
+    let stored = store.measurements("cola").await.unwrap();
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored[0].tag, "a");
+    assert_eq!(stored[1].down_mbps, None);
 
     store
         .record_report(&NodeReport {

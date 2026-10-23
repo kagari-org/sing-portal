@@ -90,9 +90,25 @@ pub struct NodeView {
     pub name: String,
     pub address: String,
     pub selection: String,
+    pub mode: String,
+    pub score: Option<f64>,
+    pub best: Option<String>,
+    pub best_score: Option<f64>,
+    pub measured_at: Option<i64>,
     pub reachable: bool,
     pub version: Option<String>,
     pub report: Option<ReportView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasurementView {
+    pub tag: String,
+    pub latency_ms: Option<f64>,
+    pub down_mbps: Option<f64>,
+    pub score: f64,
+    pub measured_at: i64,
+    pub best: bool,
 }
 
 #[derive(Serialize)]
@@ -146,7 +162,7 @@ pub struct ProviderView {
 pub struct TestResponse {
     pub tag: String,
     pub kind: String,
-    pub latency_ms: Option<u64>,
+    pub latency_ms: Option<f64>,
     pub bytes: Option<u64>,
     pub seconds: Option<f64>,
     pub down_mbps: Option<f64>,

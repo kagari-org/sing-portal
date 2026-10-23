@@ -54,6 +54,13 @@ pub async fn run_once(state: &AppState) -> ApiResult<usize> {
         if !reset.is_empty() {
             tracing::info!(nodes = ?reset, "selections reset to s_auto");
         }
+
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(error) = crate::auto::run_once(&state).await {
+                tracing::warn!(%error, "auto selection after refresh failed");
+            }
+        });
     }
 
     Ok(refreshed)

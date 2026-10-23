@@ -1,3 +1,4 @@
+pub mod auto;
 pub mod config;
 pub mod error;
 pub mod fetch;
@@ -46,6 +47,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/nodes/{name}/proxies", get(nodes::proxies))
         .route("/api/nodes/{name}/selection", put(nodes::set_selection))
         .route("/api/nodes/{name}/test", post(nodes::test))
+        .route("/api/nodes/{name}/auto", post(nodes::auto))
+        .route("/api/nodes/{name}/mode", put(nodes::set_mode))
+        .route(
+            "/api/nodes/{name}/measurements",
+            get(nodes::measurements),
+        )
         .route("/api/v1/nodes/{name}/state", get(agent::state))
         .route("/api/v1/nodes/{name}/status", post(agent::status))
         .fallback(assets::handler)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 import {
   NButton,
   NCard,
@@ -17,6 +17,7 @@ import {
   formatLatency,
   formatMbps,
   type Measurement,
+  type MeasurementRow,
   type Provider,
   type ProviderNode,
   type TestKind,
@@ -35,6 +36,7 @@ const testMachine = ref<string | null>(null)
 const latency = reactive<Record<string, Measurement>>({})
 const bandwidth = reactive<Record<string, Measurement>>({})
 const errors = reactive<Record<string, string>>({})
+const scores = ref<MeasurementRow[]>([])
 const busy = ref<string | null>(null)
 const bulk = ref<TestKind | null>(null)
 const progress = ref({ done: 0, total: 0 })
@@ -114,6 +116,23 @@ const columns: DataTableColumns<Row> = [
         })
       }
       return h(NText, { depth: 3 }, { default: () => '—' })
+    },
+  },
+  {
+    title: 'Score',
+    key: 'score',
+    width: 130,
+    render: (row) => {
+      const score = scores.value.find((entry) => entry.tag === row.tag)
+      if (!score) {
+        return h(NText, { depth: 3 }, { default: () => '—' })
+      }
+      return h(NSpace, { size: 6, align: 'center' }, {
+        default: () => [
+          h(NText, { depth: 2 }, { default: () => score.score.toFixed(1) }),
+          score.best ? h(NTag, { size: 'small', type: 'success' }, { default: () => 'best' }) : null,
+        ],
+      })
     },
   },
   {
@@ -219,10 +238,27 @@ async function runAll(kind: TestKind) {
   }
 }
 
+async function loadScores() {
+  if (!testMachine.value) {
+    scores.value = []
+    return
+  }
+  try {
+    scores.value = await api.listMeasurements(testMachine.value)
+  } catch {
+    scores.value = []
+  }
+}
+
+watch(testMachine, () => {
+  loadScores()
+})
+
 onMounted(async () => {
   await Promise.all([store.loadProviders(), store.loadMachines()])
   testMachine.value =
     store.machines.find((machine) => machine.reachable)?.name ?? store.machines[0]?.name ?? null
+  loadScores()
 })
 </script>
 
@@ -258,7 +294,12 @@ onMounted(async () => {
       <n-text v-if="bulk" depth="3">
         {{ progress.done }}/{{ progress.total }}
       </n-text>
-      <n-button size="small" @click="store.loadProviders()">Reload</n-button>
+      <n-button
+        size="small"
+        @click="store.loadProviders(); loadScores()"
+      >
+        Reload
+      </n-button>
     </n-space>
   </div>
 

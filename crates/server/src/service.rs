@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+use sing_portal_core::clash_api::ClashClient;
+use sing_portal_core::model::DEFAULT_TEST_URL;
+
 use serde_json::Value;
 use sing_portal_core::canonical::{normalize, sort_by_tag};
 use sing_portal_core::detect::{Format, parse_subscription};
@@ -215,4 +218,88 @@ pub async fn record_report(state: &AppState, report: NodeReport) -> ApiResult<bo
     }
 
     Ok(changed)
+}
+
+pub async fn probe(
+    state: &AppState,
+    node: &crate::config::NodeConfig,
+    tag: &str,
+    kind: &str,
+    url: Option<&str>,
+) -> ApiResult<crate::handlers::views::TestResponse> {
+    let lock = state.test_lock(&node.name).await;
+    let _guard = lock.lock().await;
+
+    let agent_url = format!(
+        "http://{}:{}/test/{}",
+        node.host(),
+        state.config().test_port,
+        kind
+    );
+    let payload = serde_json::json!({ "tag": tag, "url": url });
+
+    match state
+        .test_http()
+        .post(&agent_url)
+        .header("x-portal-request", "1")
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {
+            let body: serde_json::Value = response.json().await.map_err(|error| {
+                ApiError::Upstream(format!("invalid node test response: {error}"))
+            })?;
+            Ok(crate::handlers::views::TestResponse {
+                tag: tag.to_string(),
+                kind: kind.to_string(),
+                latency_ms: body.get("latencyMs").and_then(serde_json::Value::as_f64),
+                bytes: body.get("bytes").and_then(serde_json::Value::as_u64),
+                seconds: body.get("seconds").and_then(serde_json::Value::as_f64),
+                down_mbps: body.get("downMbps").and_then(serde_json::Value::as_f64),
+                source: "agent".to_string(),
+                restored: body
+                    .get("restored")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
+            })
+        }
+        Ok(response) => {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            fallback(node, tag, kind, format!("node test endpoint returned {status}: {text}")).await
+        }
+        Err(error) => {
+            fallback(node, tag, kind, format!("node test endpoint unavailable: {error}")).await
+        }
+    }
+}
+
+async fn fallback(
+    node: &crate::config::NodeConfig,
+    tag: &str,
+    kind: &str,
+    reason: String,
+) -> ApiResult<crate::handlers::views::TestResponse> {
+    if kind != "latency" {
+        return Err(ApiError::Upstream(reason));
+    }
+
+    let client = ClashClient::new(&node.clash_base_url(), Duration::from_secs(10))
+        .map_err(ApiError::from_core)?;
+    let delay = client
+        .delay(tag, DEFAULT_TEST_URL, 5000)
+        .await
+        .map_err(ApiError::from_core)?;
+
+    Ok(crate::handlers::views::TestResponse {
+        tag: tag.to_string(),
+        kind: "latency".to_string(),
+        latency_ms: Some(delay as f64),
+        bytes: None,
+        seconds: None,
+        down_mbps: None,
+        source: "clash".to_string(),
+        restored: None,
+    })
 }

@@ -89,11 +89,46 @@ pub struct SubscriptionPatch {
     pub next_refresh_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SelectionMode {
+    Auto,
+    Manual,
+}
+
+impl SelectionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SelectionMode::Auto => "auto",
+            SelectionMode::Manual => "manual",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(SelectionMode::Auto),
+            "manual" => Some(SelectionMode::Manual),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Selection {
     pub node_name: String,
     pub outbound: String,
+    pub mode: SelectionMode,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Measurement {
+    pub node_name: String,
+    pub tag: String,
+    pub latency_ms: Option<f64>,
+    pub down_mbps: Option<f64>,
+    pub score: f64,
+    pub measured_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

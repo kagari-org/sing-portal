@@ -91,7 +91,21 @@ echo "== GET /api/providers (nodes grouped by subscription)"
 curl -fsS "$portal/api/providers" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const p=JSON.parse(s)[0];console.log({provider:p.name,slug:p.slug,nodes:p.nodes.length,first:p.nodes[0].tag})})'
 
 echo
-echo "== switch egress to a concrete node"
+echo "== auto selection: agent probes every node, portal scores and switches"
+curl -fsS -X POST -H 'X-Portal-Request: 1' "$portal/api/nodes/home/auto" >/dev/null
+for _ in $(seq 1 100); do
+  count="$(curl -fsS "$portal/api/nodes/home/measurements" |
+    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).length))')"
+  if [ "$count" -gt 0 ]; then break; fi
+  sleep 0.2
+done
+curl -fsS "$portal/api/nodes/home/measurements" |
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const row of JSON.parse(s).slice(0,5)){console.log((row.best?"* ":"  ")+row.tag.padEnd(28)+" score="+row.score.toFixed(1)+" lat="+(row.latencyMs===null?"n/a":row.latencyMs.toFixed(1))+"ms bw="+(row.downMbps===null?"n/a":row.downMbps.toFixed(1)+"Mbps"))}})'
+curl -fsS "$portal/api/nodes" |
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const n=JSON.parse(s)[0];console.log({mode:n.mode,selection:n.selection,score:n.score===null?null:Number(n.score.toFixed(1)),best:n.best})})'
+
+echo
+echo "== switch egress to a concrete node (this pins the machine to manual)"
 curl -fsS -X PUT -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
   --data '{"outbound":"provider-a · HY2"}' "$portal/api/nodes/home/selection"
 echo

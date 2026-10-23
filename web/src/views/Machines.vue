@@ -6,6 +6,7 @@ import {
   NDataTable,
   NSelect,
   NSpace,
+  NSwitch,
   NTag,
   NText,
   useMessage,
@@ -18,11 +19,23 @@ const store = usePortalStore()
 const message = useMessage()
 const busy = ref<string | null>(null)
 const latency = ref<Record<string, number | null>>({})
+
 const selectionOptions = computed(() => [
-  { label: 's_auto (auto select)', value: 's_auto' },
+  { label: 's_auto (fallback)', value: 's_auto' },
   { label: 's_direct (direct)', value: 's_direct' },
   ...store.outboundTags().map((tag) => ({ label: tag, value: tag })),
 ])
+
+function shortRevision(revision: string | null | undefined): string {
+  if (!revision) return '—'
+  if (revision.length <= 18) return revision
+  return `${revision.slice(0, 18)}…`
+}
+
+function formatScore(score: number | null | undefined): string {
+  if (score === null || score === undefined) return '—'
+  return score.toFixed(1)
+}
 
 const columns = computed<DataTableColumns<Machine>>(() => [
   { title: 'Machine', key: 'name' },
@@ -41,9 +54,19 @@ const columns = computed<DataTableColumns<Machine>>(() => [
       }),
   },
   {
+    title: 'Auto',
+    key: 'mode',
+    width: 80,
+    render: (row) =>
+      h(NSwitch, {
+        value: row.mode === 'auto',
+        onUpdateValue: (value: boolean) => setMode(row, value),
+      }),
+  },
+  {
     title: 'Egress',
     key: 'selection',
-    width: 260,
+    width: 240,
     render: (row) =>
       h(NSelect, {
         value: row.selection,
@@ -54,10 +77,33 @@ const columns = computed<DataTableColumns<Machine>>(() => [
       }),
   },
   {
+    title: 'Score',
+    key: 'score',
+    width: 90,
+    render: (row) => formatScore(row.score),
+  },
+  {
+    title: 'Best',
+    key: 'best',
+    render: (row) =>
+      h(NText, { depth: 3 }, {
+        default: () => (row.best ? `${row.best} (${formatScore(row.bestScore)})` : '—'),
+      }),
+  },
+  {
     title: 'Latency',
     key: 'latency',
-    width: 110,
+    width: 100,
     render: (row) => formatLatency(latency.value[row.name] ?? null),
+  },
+  {
+    title: 'Health',
+    key: 'health',
+    width: 170,
+    render: (row) =>
+      h(NTag, { size: 'small', type: healthType(row.report?.health ?? '') }, {
+        default: () => row.report?.health || 'no report',
+      }),
   },
   {
     title: 'Reported revision',
@@ -68,15 +114,6 @@ const columns = computed<DataTableColumns<Machine>>(() => [
       }),
   },
   {
-    title: 'Health',
-    key: 'health',
-    width: 190,
-    render: (row) =>
-      h(NTag, { size: 'small', type: healthType(row.report?.health ?? '') }, {
-        default: () => row.report?.health || 'no report',
-      }),
-  },
-  {
     title: 'Last report',
     key: 'reportedAt',
     render: (row) => formatTimestamp(row.report?.reportedAt ?? null),
@@ -84,31 +121,62 @@ const columns = computed<DataTableColumns<Machine>>(() => [
   {
     title: 'Actions',
     key: 'actions',
-    width: 130,
+    width: 200,
     render: (row) =>
-      h(
-        NButton,
-        {
-          size: 'small',
-          loading: busy.value === row.name,
-          onClick: () => test(row),
-        },
-        { default: () => 'Test latency' },
-      ),
+      h(NSpace, { size: 8 }, {
+        default: () => [
+          h(
+            NButton,
+            {
+              size: 'small',
+              disabled: row.mode !== 'auto' || busy.value === `auto:${row.name}`,
+              loading: busy.value === `auto:${row.name}`,
+              onClick: () => evaluate(row),
+            },
+            { default: () => 'Evaluate' },
+          ),
+          h(
+            NButton,
+            {
+              size: 'small',
+              loading: busy.value === `latency:${row.name}`,
+              onClick: () => test(row),
+            },
+            { default: () => 'Test latency' },
+          ),
+        ],
+      }),
   },
 ])
-
-function shortRevision(revision: string | null | undefined): string {
-  if (!revision) return '—'
-  if (revision.length <= 18) return revision
-  return `${revision.slice(0, 18)}…`
-}
 
 function healthType(health: string): 'success' | 'warning' | 'error' | 'default' {
   if (health === 'ok') return 'success'
   if (health === 'no_active_subscriptions') return 'warning'
   if (health === '') return 'default'
   return 'error'
+}
+
+async function setMode(machine: Machine, auto: boolean) {
+  try {
+    await api.setMode(machine.name, auto ? 'auto' : 'manual')
+    message.success(`${machine.name}: ${auto ? 'auto' : 'manual'} selection`)
+    setTimeout(() => store.loadMachines().catch(() => undefined), auto ? 1500 : 0)
+  } catch (error) {
+    message.error((error as Error).message)
+  }
+}
+
+async function evaluate(machine: Machine) {
+  busy.value = `auto:${machine.name}`
+  try {
+    const result = await api.runAuto(machine.name)
+    message.info(`evaluation ${result.status}`)
+    setTimeout(() => store.loadMachines().catch(() => undefined), 2000)
+  } catch (error) {
+    message.error((error as Error).message)
+  } finally {
+    busy.value = null
+  }
 }
 
 async function choose(machine: Machine, value: string) {
@@ -126,7 +194,7 @@ async function choose(machine: Machine, value: string) {
 }
 
 async function test(machine: Machine) {
-  busy.value = machine.name
+  busy.value = `latency:${machine.name}`
   try {
     const result = await api.runTest(machine.name, machine.selection, 'latency')
     latency.value[machine.name] = result.latencyMs
@@ -152,6 +220,6 @@ onMounted(() => {
   </div>
 
   <n-card>
-    <n-data-table :columns="columns" :data="store.machines" :bordered="false" />
+    <n-data-table :columns="columns" :data="store.machines" :bordered="false" :scroll-x="1400" />
   </n-card>
 </template>

@@ -35,6 +35,10 @@ async fn app() -> TestApp {
         static_dir: Some(static_dir),
         embed_web: false,
         test_port: 3016,
+        auto_interval: Duration::from_secs(600),
+        auto_candidates: 5,
+        auto_margin: 0.15,
+        score: sing_portal_agent_score(),
     };
 
     let state = AppState::new(config).await.unwrap();
@@ -49,6 +53,10 @@ fn request(method: &str, path: &str) -> axum::http::request::Builder {
         .uri(path)
         .header(header::CONTENT_TYPE, "application/json")
         .header("x-portal-request", "1")
+}
+
+fn sing_portal_agent_score() -> sing_portal_core::score::ScoreConfig {
+    sing_portal_core::score::ScoreConfig::default()
 }
 
 async fn body_json(response: axum::response::Response) -> Value {
@@ -466,4 +474,83 @@ async fn test_lock_is_shared_per_machine() {
 async fn other(app: &TestApp, first: &std::sync::Arc<tokio::sync::Mutex<()>>) {
     let third = app.state.test_lock("other").await;
     assert!(!std::sync::Arc::ptr_eq(first, &third));
+}
+
+#[tokio::test]
+async fn selection_mode_can_be_toggled() {
+    let app = app().await;
+
+    let response = router(app.state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/nodes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let nodes = body_json(response).await;
+    assert_eq!(nodes[0]["mode"], "auto");
+
+    let response = router(app.state.clone())
+        .oneshot(
+            request("PUT", "/api/nodes/home/mode")
+                .body(Body::from(json!({ "mode": "manual" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = router(app.state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/nodes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let nodes = body_json(response).await;
+    assert_eq!(nodes[0]["mode"], "manual");
+
+    let response = router(app.state.clone())
+        .oneshot(
+            request("PUT", "/api/nodes/home/mode")
+                .body(Body::from(json!({ "mode": "sometimes" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn auto_evaluation_endpoint_is_accepted() {
+    let app = app().await;
+    let response = router(app.state.clone())
+        .oneshot(
+            request("POST", "/api/nodes/home/auto")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn measurements_start_empty() {
+    let app = app().await;
+    let response = router(app.state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/nodes/home/measurements")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await.as_array().unwrap().len(), 0);
 }

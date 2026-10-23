@@ -40,9 +40,23 @@ export interface Machine {
   name: string
   address: string
   selection: string
+  mode: 'auto' | 'manual'
+  score: number | null
+  best: string | null
+  bestScore: number | null
+  measuredAt: number | null
   reachable: boolean
   version: string | null
   report: Report | null
+}
+
+export interface MeasurementRow {
+  tag: string
+  latencyMs: number | null
+  downMbps: number | null
+  score: number
+  measuredAt: number
+  best: boolean
 }
 
 export interface ProviderNode {
@@ -163,6 +177,15 @@ export const api = {
   revision: () => request<RevisionInfo>('/api/revision'),
   listProviders: () => request<Provider[]>('/api/providers'),
   listMachines: () => request<Machine[]>('/api/nodes'),
+  listMeasurements: (machine: string) =>
+    request<MeasurementRow[]>(`/api/nodes/${machine}/measurements`),
+  setMode: (machine: string, mode: 'auto' | 'manual') =>
+    request<{ mode: string }>(`/api/nodes/${machine}/mode`, {
+      method: 'PUT',
+      body: JSON.stringify({ mode }),
+    }),
+  runAuto: (machine: string) =>
+    request<{ status: string }>(`/api/nodes/${machine}/auto`, { method: 'POST' }),
   setSelection: (machine: string, outbound: string) =>
     request<SelectionResult>(`/api/nodes/${machine}/selection`, {
       method: 'PUT',
@@ -196,5 +219,6 @@ export function formatMbps(value: number | null): string {
 }
 
 export function formatLatency(value: number | null): string {
-  return value === null ? '—' : `${value} ms`
+  if (value === null) return '—'
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ms`
 }

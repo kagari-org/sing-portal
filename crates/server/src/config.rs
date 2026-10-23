@@ -47,6 +47,10 @@ pub struct ServerConfig {
     pub fetch_max_bytes: usize,
     pub static_dir: Option<PathBuf>,
     pub embed_web: bool,
+    pub auto_interval: Duration,
+    pub auto_candidates: usize,
+    pub auto_margin: f64,
+    pub score: sing_portal_core::score::ScoreConfig,
 }
 
 impl Default for ServerConfig {
@@ -63,6 +67,10 @@ impl Default for ServerConfig {
             fetch_max_bytes: 8 * 1024 * 1024,
             static_dir: None,
             embed_web: true,
+            auto_interval: Duration::from_secs(10 * 60),
+            auto_candidates: 5,
+            auto_margin: 0.15,
+            score: sing_portal_core::score::ScoreConfig::default(),
         }
     }
 }

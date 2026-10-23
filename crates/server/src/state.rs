@@ -16,6 +16,7 @@ pub struct AppState {
     proxy_http: Option<reqwest::Client>,
     refreshing: Arc<Mutex<HashSet<String>>>,
     test_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    auto_running: Arc<Mutex<HashSet<String>>>,
 }
 
 impl AppState {
@@ -59,6 +60,7 @@ impl AppState {
             proxy_http,
             refreshing: Arc::new(Mutex::new(HashSet::new())),
             test_locks: Arc::new(Mutex::new(HashMap::new())),
+            auto_running: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -92,6 +94,14 @@ impl AppState {
             .entry(node.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
+    }
+
+    pub async fn begin_auto(&self, node: &str) -> bool {
+        self.auto_running.lock().await.insert(node.to_string())
+    }
+
+    pub async fn end_auto(&self, node: &str) {
+        self.auto_running.lock().await.remove(node);
     }
 
     pub async fn begin_refresh(&self, id: &str) -> bool {

@@ -11,14 +11,20 @@ pub mod nodes;
 pub mod subscriptions;
 
 pub use model::{
-    AuditEntry, NewSubscription, NodeReport, Selection, Snapshot, Source, Subscription,
-    SubscriptionPatch,
+    AuditEntry, Measurement, NewSubscription, NodeReport, Selection, SelectionMode, Snapshot,
+    Source, Subscription, SubscriptionPatch,
 };
 
-const MIGRATIONS: &[(&str, &str)] = &[(
-    "0001_init",
-    include_str!("../../../migrations/0001_init.sql"),
-)];
+const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0001_init",
+        include_str!("../../../migrations/0001_init.sql"),
+    ),
+    (
+        "0002_auto_selection",
+        include_str!("../../../migrations/0002_auto_selection.sql"),
+    ),
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {

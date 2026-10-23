@@ -19,6 +19,7 @@ use crate::error::{AgentError, Result};
 pub enum Kind {
     Latency,
     Bandwidth,
+    Both,
 }
 
 impl Kind {
@@ -26,6 +27,7 @@ impl Kind {
         match value {
             "latency" => Some(Kind::Latency),
             "bandwidth" => Some(Kind::Bandwidth),
+            "both" => Some(Kind::Both),
             _ => None,
         }
     }
@@ -34,6 +36,7 @@ impl Kind {
         match self {
             Kind::Latency => "latency",
             Kind::Bandwidth => "bandwidth",
+            Kind::Both => "both",
         }
     }
 }
@@ -64,7 +67,7 @@ impl Default for TesterConfig {
 pub struct Measurement {
     pub tag: String,
     pub kind: String,
-    pub latency_ms: Option<u64>,
+    pub latency_ms: Option<f64>,
     pub bytes: Option<u64>,
     pub seconds: Option<f64>,
     pub down_mbps: Option<f64>,
@@ -76,10 +79,35 @@ impl Measurement {
         Self {
             tag: tag.to_string(),
             kind: Kind::Latency.as_str().to_string(),
-            latency_ms: Some(elapsed.as_millis() as u64),
+            latency_ms: Some(elapsed.as_secs_f64() * 1000.0),
             bytes: None,
             seconds: None,
             down_mbps: None,
+            restored: restored.to_string(),
+        }
+    }
+
+    fn combined(
+        tag: &str,
+        latency: Duration,
+        bandwidth: Option<(u64, f64)>,
+        restored: &str,
+    ) -> Self {
+        let (bytes, seconds, down) = match bandwidth {
+            Some((bytes, seconds)) => (
+                Some(bytes),
+                Some(seconds),
+                Some(down_mbps(bytes, seconds)),
+            ),
+            None => (None, None, None),
+        };
+        Self {
+            tag: tag.to_string(),
+            kind: Kind::Both.as_str().to_string(),
+            latency_ms: Some(latency.as_secs_f64() * 1000.0),
+            bytes,
+            seconds,
+            down_mbps: down,
             restored: restored.to_string(),
         }
     }
@@ -130,12 +158,7 @@ impl Tester {
         })
     }
 
-    pub async fn measure(
-        &self,
-        tag: &str,
-        kind: Kind,
-        url: Option<&str>,
-    ) -> Result<Measurement> {
+    pub async fn measure(&self, tag: &str, kind: Kind, url: Option<&str>) -> Result<Measurement> {
         let _guard = self.lock.lock().await;
 
         let previous = self.clash.current_selection().await.unwrap_or_default();
@@ -146,16 +169,7 @@ impl Tester {
                 .map_err(|error| AgentError::Clash(error.to_string()))?;
         }
 
-        let result = match kind {
-            Kind::Latency => {
-                let url = url.unwrap_or(&self.config.latency_url);
-                self.latency(url).await
-            }
-            Kind::Bandwidth => {
-                let url = url.unwrap_or(&self.config.download_url);
-                self.bandwidth(url).await
-            }
-        };
+        let result = self.probe(tag, kind, url).await;
 
         let restored = if previous.is_empty() || previous == tag {
             previous.clone()
@@ -165,12 +179,36 @@ impl Tester {
             tag.to_string()
         };
 
-        match result {
-            Ok((elapsed, bytes, seconds)) => Ok(match kind {
-                Kind::Latency => Measurement::latency(tag, elapsed, &restored),
-                Kind::Bandwidth => Measurement::bandwidth(tag, bytes, seconds, &restored),
-            }),
-            Err(error) => Err(error),
+        let mut measurement = result?;
+        measurement.restored = restored;
+        Ok(measurement)
+    }
+
+    async fn probe(&self, tag: &str, kind: Kind, url: Option<&str>) -> Result<Measurement> {
+        match kind {
+            Kind::Latency => {
+                let (elapsed, _, _) = self
+                    .latency(url.unwrap_or(&self.config.latency_url))
+                    .await?;
+                Ok(Measurement::latency(tag, elapsed, ""))
+            }
+            Kind::Bandwidth => {
+                let (_, bytes, seconds) = self
+                    .bandwidth(url.unwrap_or(&self.config.download_url))
+                    .await?;
+                Ok(Measurement::bandwidth(tag, bytes, seconds, ""))
+            }
+            Kind::Both => {
+                let (latency, _, _) = self
+                    .latency(url.unwrap_or(&self.config.latency_url))
+                    .await?;
+                let bandwidth = self
+                    .bandwidth(url.unwrap_or(&self.config.download_url))
+                    .await
+                    .ok()
+                    .map(|(_, bytes, seconds)| (bytes, seconds));
+                Ok(Measurement::combined(tag, latency, bandwidth, ""))
+            }
         }
     }
 
@@ -233,6 +271,7 @@ impl Tester {
             .route("/healthz", get(health))
             .route("/test/latency", post(latency))
             .route("/test/bandwidth", post(bandwidth))
+            .route("/test/both", post(both))
             .layer(axum::middleware::from_fn(require_portal_header))
             .with_state(self);
 
@@ -266,6 +305,10 @@ async fn bandwidth(
     Json(request): Json<TestRequest>,
 ) -> Response {
     run(&tester, request, Kind::Bandwidth).await
+}
+
+async fn both(State(tester): State<Arc<Tester>>, Json(request): Json<TestRequest>) -> Response {
+    run(&tester, request, Kind::Both).await
 }
 
 async fn run(tester: &Tester, request: TestRequest, kind: Kind) -> Response {

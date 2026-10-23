@@ -220,10 +220,19 @@ async function runAll(kind: TestKind) {
   progress.value = { done: 0, total: targets.length }
   let failed = 0
 
-  try {
-    for (const row of targets) {
+  // latency probes are cheap and the agent runs them concurrently; network
+  // quality tests are serialised there, so only send one at a time
+  const machine = testMachine.value
+  const limit = kind === 'latency' ? 8 : 1
+  let next = 0
+
+  const worker = async () => {
+    while (true) {
+      const index = next++
+      if (index >= targets.length) return
+      const row = targets[index]
       try {
-        const result = await api.runTest(testMachine.value, row.tag, kind)
+        const result = await api.runTest(machine, row.tag, kind)
         remember(row, kind, result)
       } catch (error) {
         failed += 1
@@ -231,6 +240,10 @@ async function runAll(kind: TestKind) {
       }
       progress.value = { done: progress.value.done + 1, total: targets.length }
     }
+  }
+
+  try {
+    await Promise.all(Array.from({ length: Math.min(limit, targets.length) }, worker))
   } finally {
     bulk.value = null
   }

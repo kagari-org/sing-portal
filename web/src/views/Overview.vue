@@ -30,67 +30,67 @@ function healthType(health: string): 'success' | 'warning' | 'error' | 'default'
 
 <template>
   <n-space vertical size="large">
-    <n-alert v-if="!store.nodes.length" type="warning" title="未配置节点">
-      启动时通过 <n-text code>--nodes "home=10.11.0.3:9090"</n-text> 声明节点，否则节点页为空。
+    <n-alert v-if="!store.machines.length" type="warning" title="No machines configured">
+      Start the portal with <n-text code>--nodes "home=10.11.0.3:9090"</n-text>.
     </n-alert>
 
     <n-grid cols="1 640:3" :x-gap="16" :y-gap="16">
       <n-grid-item>
-        <n-card title="出口 revision">
+        <n-card title="Outbound revision">
           <n-statistic :value="store.revision?.revision ?? '—'" />
           <n-text depth="3">
-            {{ store.revision?.outbounds ?? 0 }} 个节点 · {{ store.revision?.enabledSubscriptions ?? 0 }}
-            个启用订阅
+            {{ store.revision?.outbounds ?? 0 }} nodes · {{ store.revision?.enabledSubscriptions ?? 0 }}
+            active subscriptions
           </n-text>
         </n-card>
       </n-grid-item>
       <n-grid-item>
-        <n-card title="订阅">
+        <n-card title="Subscriptions">
           <n-statistic :value="String(store.subscriptions.length)" />
           <n-text depth="3">
-            启用 {{ store.subscriptions.filter((item) => item.enabled).length }} · 失败
-            {{ store.subscriptions.filter((item) => item.lastError).length }}
+            {{ store.subscriptions.filter((item) => item.enabled).length }} active ·
+            {{ store.subscriptions.filter((item) => item.lastError).length }} failing
           </n-text>
         </n-card>
       </n-grid-item>
       <n-grid-item>
-        <n-card title="节点">
-          <n-statistic :value="String(store.nodes.filter((node) => node.reachable).length)" />
-          <n-text depth="3">共 {{ store.nodes.length }} 台，Clash API 可达数</n-text>
+        <n-card title="Machines">
+          <n-statistic :value="String(store.machines.filter((item) => item.reachable).length)" />
+          <n-text depth="3">Clash API reachable out of {{ store.machines.length }}</n-text>
         </n-card>
       </n-grid-item>
     </n-grid>
 
-    <n-card title="节点状态">
+    <n-card title="Machine status">
       <n-table :bordered="false" :single-line="false">
         <thead>
           <tr>
-            <th>节点</th>
-            <th>地址</th>
-            <th>可达</th>
-            <th>出口</th>
-            <th>上报 revision</th>
-            <th>健康</th>
-            <th>最近上报</th>
+            <th>Machine</th>
+            <th>Address</th>
+            <th>Reachable</th>
+            <th>Egress</th>
+            <th>Reported revision</th>
+            <th>Health</th>
+            <th>Last report</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="node in store.nodes" :key="node.name">
-            <td>{{ node.name }}</td>
-            <td><n-text code>{{ node.address }}</n-text></td>
+          <tr v-for="machine in store.machines" :key="machine.name">
+            <td>{{ machine.name }}</td>
+            <td><n-text code>{{ machine.address }}</n-text></td>
             <td>
-              <n-tag :type="node.reachable ? 'success' : 'error'" size="small">
-                {{ node.reachable ? '在线' : '不可达' }}
+              <n-tag :type="machine.reachable ? 'success' : 'error'" size="small">
+                {{ machine.reachable ? 'online' : 'unreachable' }}
               </n-tag>
             </td>
-            <td>{{ node.selection }}</td>
-            <td><n-text depth="3">{{ node.report?.revision || '—' }}</n-text></td>
+            <td>{{ machine.selection }}</td>
+            <td><n-text depth="3">{{ machine.report?.revision || '—' }}</n-text></td>
             <td>
-              <n-tag :type="healthType(node.report?.health ?? '')" size="small">
-                {{ node.report?.health || '未上报' }}
+              <n-tag :type="healthType(machine.report?.health ?? '')" size="small">
+                {{ machine.report?.health || 'no report' }}
               </n-tag>
             </td>
-            <td>{{ formatTimestamp(node.report?.reportedAt ?? null) }}</td>
+            <td>{{ formatTimestamp(machine.report?.reportedAt ?? null) }}</td>
           </tr>
         </tbody>
       </n-table>

@@ -3,7 +3,9 @@ pub mod config;
 pub mod error;
 pub mod portal;
 pub mod state;
+pub mod tester;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use sing_portal_core::canonical::selection_revision;
@@ -143,6 +145,18 @@ impl Agent {
     }
 
     pub async fn run(self) -> Result<()> {
+        if let Some(listen) = self.config.test_listen {
+            let tester = Arc::new(tester::Tester::new(
+                self.config.tester.clone(),
+                self.clash.clone(),
+            )?);
+            tokio::spawn(async move {
+                if let Err(error) = tester.serve(listen).await {
+                    tracing::error!(%error, "agent test endpoint stopped");
+                }
+            });
+        }
+
         if self.config.once {
             return match self.run_once().await {
                 Ok(outcome) => {

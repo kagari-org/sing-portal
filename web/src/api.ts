@@ -36,13 +36,44 @@ export interface Report {
   online: boolean
 }
 
-export interface NodeInfo {
+export interface Machine {
   name: string
   address: string
   selection: string
   reachable: boolean
   version: string | null
   report: Report | null
+}
+
+export interface ProviderNode {
+  tag: string
+  kind: string
+  server: string
+  serverPort: number | null
+}
+
+export interface Provider {
+  id: string
+  name: string
+  slug: string
+  format: string
+  enabled: boolean
+  lastError: string
+  lastFetchedAt: number | null
+  nodes: ProviderNode[]
+}
+
+export type TestKind = 'latency' | 'bandwidth'
+
+export interface Measurement {
+  tag: string
+  kind: TestKind
+  latencyMs: number | null
+  bytes: number | null
+  seconds: number | null
+  downMbps: number | null
+  source: 'agent' | 'clash'
+  restored: string | null
 }
 
 export interface RevisionInfo {
@@ -54,11 +85,6 @@ export interface RevisionInfo {
 export interface SelectionResult {
   selection: string
   applied: boolean
-}
-
-export interface DelayResult {
-  tag: string
-  delay: number
 }
 
 export interface AuditEntry {
@@ -135,16 +161,17 @@ export const api = {
   refreshSubscription: (id: string) =>
     request<Mutation>(`/api/subscriptions/${id}/refresh`, { method: 'POST' }),
   revision: () => request<RevisionInfo>('/api/revision'),
-  listNodes: () => request<NodeInfo[]>('/api/nodes'),
-  setSelection: (node: string, outbound: string) =>
-    request<SelectionResult>(`/api/nodes/${node}/selection`, {
+  listProviders: () => request<Provider[]>('/api/providers'),
+  listMachines: () => request<Machine[]>('/api/nodes'),
+  setSelection: (machine: string, outbound: string) =>
+    request<SelectionResult>(`/api/nodes/${machine}/selection`, {
       method: 'PUT',
       body: JSON.stringify({ outbound }),
     }),
-  testDelay: (node: string, tag: string) =>
-    request<DelayResult>(`/api/nodes/${node}/test`, {
+  runTest: (machine: string, tag: string, kind: TestKind) =>
+    request<Measurement>(`/api/nodes/${machine}/test`, {
       method: 'POST',
-      body: JSON.stringify({ tag }),
+      body: JSON.stringify({ tag, kind }),
     }),
   listAudit: (limit = 100) => request<AuditEntry[]>(`/api/audit?limit=${limit}`),
   exportSnapshot: () => request<Snapshot>('/api/export'),
@@ -162,4 +189,12 @@ export function formatDuration(seconds: number): string {
   if (seconds % 3600 === 0) return `${seconds / 3600}h`
   if (seconds % 60 === 0) return `${seconds / 60}m`
   return `${seconds}s`
+}
+
+export function formatMbps(value: number | null): string {
+  return value === null ? '—' : `${value.toFixed(1)} Mbps`
+}
+
+export function formatLatency(value: number | null): string {
+  return value === null ? '—' : `${value} ms`
 }

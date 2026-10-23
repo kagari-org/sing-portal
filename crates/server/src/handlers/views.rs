@@ -104,13 +104,6 @@ pub struct SelectionResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DelayResponse {
-    pub tag: String,
-    pub delay: u64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct NodeStateView {
     pub revision: String,
     pub selection_revision: String,
@@ -124,4 +117,39 @@ pub struct RevisionView {
     pub revision: String,
     pub outbounds: usize,
     pub enabled_subscriptions: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderNodeView {
+    pub tag: String,
+    pub kind: String,
+    pub server: String,
+    pub server_port: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderView {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub format: String,
+    pub enabled: bool,
+    pub last_error: String,
+    pub last_fetched_at: Option<i64>,
+    pub nodes: Vec<ProviderNodeView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestResponse {
+    pub tag: String,
+    pub kind: String,
+    pub latency_ms: Option<u64>,
+    pub bytes: Option<u64>,
+    pub seconds: Option<f64>,
+    pub down_mbps: Option<f64>,
+    pub source: String,
+    pub restored: Option<String>,
 }

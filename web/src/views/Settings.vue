@@ -18,11 +18,11 @@ const importing = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
 const auditColumns: DataTableColumns<AuditEntry> = [
-  { title: '时间', key: 'at', render: (row) => formatTimestamp(row.at) },
-  { title: '来源', key: 'actor', width: 130 },
-  { title: '动作', key: 'action', width: 180 },
-  { title: '目标', key: 'target', width: 180 },
-  { title: '详情', key: 'detail' },
+  { title: 'Time', key: 'at', render: (row) => formatTimestamp(row.at) },
+  { title: 'Actor', key: 'actor', width: 140 },
+  { title: 'Action', key: 'action', width: 190 },
+  { title: 'Target', key: 'target', width: 190 },
+  { title: 'Detail', key: 'detail' },
 ]
 
 async function loadAudit() {
@@ -43,7 +43,7 @@ async function download() {
     anchor.download = `sing-portal-export-${Date.now()}.json`
     anchor.click()
     URL.revokeObjectURL(url)
-    message.success('已导出（包含订阅凭据，请妥善保管）')
+    message.success('Exported (contains subscription credentials)')
   } catch (error) {
     message.error((error as Error).message)
   }
@@ -61,7 +61,7 @@ async function onFilePicked(event: Event) {
   try {
     const snapshot = JSON.parse(await file.text()) as Snapshot
     await api.importSnapshot(snapshot)
-    message.success('导入完成')
+    message.success('Imported')
     await loadAudit()
   } catch (error) {
     message.error((error as Error).message)
@@ -76,24 +76,25 @@ onMounted(loadAudit)
 
 <template>
   <n-space vertical size="large">
-    <n-alert type="warning" title="备份包含订阅凭据">
-      导出文件里有订阅原文和 URL，等同于控制面全部权限，请按密钥对待。
+    <n-alert type="warning" title="Backups contain subscription credentials">
+      The exported file holds the raw subscription content and URLs, which is equivalent to full
+      control of this portal. Treat it like a secret.
     </n-alert>
 
-    <n-card title="备份与恢复">
+    <n-card title="Backup and restore">
       <n-space>
-        <n-button type="primary" @click="download">导出 JSON</n-button>
-        <n-button :loading="importing" @click="pickFile">导入 JSON</n-button>
+        <n-button type="primary" @click="download">Export JSON</n-button>
+        <n-button :loading="importing" @click="pickFile">Import JSON</n-button>
         <input ref="fileInput" type="file" accept="application/json" hidden @change="onFilePicked" />
       </n-space>
       <p>
-        <n-text depth="3">导入会整体替换现有订阅与出口选择，操作记录写入审计日志。</n-text>
+        <n-text depth="3">Import replaces every subscription and egress selection, and is audited.</n-text>
       </p>
     </n-card>
 
-    <n-card title="审计日志">
+    <n-card title="Audit log">
       <template #header-extra>
-        <n-button size="small" @click="loadAudit">刷新</n-button>
+        <n-button size="small" @click="loadAudit">Refresh</n-button>
       </template>
       <n-data-table
         :columns="auditColumns"

@@ -34,6 +34,7 @@ async fn app() -> TestApp {
         fetch_max_bytes: 1024 * 1024,
         static_dir: Some(static_dir),
         embed_web: false,
+        test_port: 3016,
     };
 
     let state = AppState::new(config).await.unwrap();
@@ -397,4 +398,57 @@ fn assert_send_sync() {
     fn check<T: Send + Sync>() {}
     check::<AppState>();
     let _: PathBuf = PathBuf::new();
+}
+
+#[tokio::test]
+async fn providers_group_nodes_by_subscription() {
+    let app = app().await;
+    create_subscription(&app, "Provider A").await;
+
+    let response = router(app.state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/providers")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let providers = body_json(response).await;
+    let provider = &providers[0];
+    assert_eq!(provider["name"], "Provider A");
+    assert_eq!(provider["slug"], "provider-a");
+    assert_eq!(provider["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(provider["nodes"][0]["kind"], "hysteria2");
+    assert_eq!(provider["nodes"][0]["server"], "jp.example.com");
+}
+
+#[tokio::test]
+async fn test_endpoint_validates_kind_and_tags() {
+    let app = app().await;
+    create_subscription(&app, "Provider A").await;
+
+    let response = router(app.state.clone())
+        .oneshot(
+            request("POST", "/api/nodes/home/test")
+                .body(Body::from(
+                    json!({ "tag": "provider-a · US 01", "kind": "throughput" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = router(app.state.clone())
+        .oneshot(
+            request("POST", "/api/nodes/home/test")
+                .body(Body::from(json!({ "tag": "missing" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }

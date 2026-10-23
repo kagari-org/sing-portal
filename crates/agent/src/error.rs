@@ -14,6 +14,10 @@ pub enum AgentError {
     Unhealthy,
     #[error("template: {0}")]
     Template(String),
+    #[error("proxy inbound: {0}")]
+    Proxy(String),
+    #[error("measurement failed: {0}")]
+    Measure(String),
 }
 
 impl From<sing_portal_core::Error> for AgentError {

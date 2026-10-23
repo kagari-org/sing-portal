@@ -86,6 +86,8 @@ async fn fixture(selection: &str) -> Fixture {
         once: true,
         best_effort: false,
         health_timeout: Duration::from_millis(600),
+        test_listen: None,
+        tester: sing_portal_agent::tester::TesterConfig::default(),
     };
 
     Fixture {

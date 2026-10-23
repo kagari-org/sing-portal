@@ -1,10 +1,17 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import { api, type NodeInfo, type RevisionInfo, type Subscription } from '../api'
+import {
+  api,
+  type Machine,
+  type Provider,
+  type RevisionInfo,
+  type Subscription,
+} from '../api'
 
 export const usePortalStore = defineStore('portal', () => {
   const subscriptions = ref<Subscription[]>([])
-  const nodes = ref<NodeInfo[]>([])
+  const providers = ref<Provider[]>([])
+  const machines = ref<Machine[]>([])
   const revision = ref<RevisionInfo | null>(null)
   const loading = ref(false)
 
@@ -12,8 +19,12 @@ export const usePortalStore = defineStore('portal', () => {
     subscriptions.value = await api.listSubscriptions()
   }
 
-  async function loadNodes() {
-    nodes.value = await api.listNodes()
+  async function loadProviders() {
+    providers.value = await api.listProviders()
+  }
+
+  async function loadMachines() {
+    machines.value = await api.listMachines()
   }
 
   async function loadRevision() {
@@ -23,7 +34,7 @@ export const usePortalStore = defineStore('portal', () => {
   async function refreshAll() {
     loading.value = true
     try {
-      await Promise.all([loadSubscriptions(), loadNodes(), loadRevision()])
+      await Promise.all([loadSubscriptions(), loadProviders(), loadMachines(), loadRevision()])
     } finally {
       loading.value = false
     }
@@ -40,11 +51,13 @@ export const usePortalStore = defineStore('portal', () => {
 
   return {
     subscriptions,
-    nodes,
+    providers,
+    machines,
     revision,
     loading,
     loadSubscriptions,
-    loadNodes,
+    loadProviders,
+    loadMachines,
     loadRevision,
     refreshAll,
     outboundTags,

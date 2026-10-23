@@ -20,7 +20,7 @@ use axum::routing::{get, patch, post, put};
 use serde_json::json;
 use tower_http::trace::TraceLayer;
 
-use crate::handlers::{agent, api, assets, nodes, subscriptions};
+use crate::handlers::{agent, api, assets, nodes, providers, subscriptions};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -41,6 +41,7 @@ pub fn router(state: AppState) -> Router {
             "/api/subscriptions/{id}/refresh",
             post(subscriptions::refresh),
         )
+        .route("/api/providers", get(providers::list))
         .route("/api/nodes", get(nodes::list))
         .route("/api/nodes/{name}/proxies", get(nodes::proxies))
         .route("/api/nodes/{name}/selection", put(nodes::set_selection))

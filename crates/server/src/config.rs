@@ -11,6 +11,20 @@ pub struct NodeConfig {
 }
 
 impl NodeConfig {
+    pub fn host(&self) -> String {
+        let raw = self
+            .address
+            .trim_start_matches("http://")
+            .trim_start_matches("https://");
+        match raw.rsplit_once(':') {
+            Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_string(),
+            _ => raw.to_string(),
+        }
+    }
+
     pub fn clash_base_url(&self) -> String {
         if self.address.starts_with("http://") || self.address.starts_with("https://") {
             self.address.clone()
@@ -27,6 +41,7 @@ pub struct ServerConfig {
     pub nodes: Vec<NodeConfig>,
     pub sing_box: Option<PathBuf>,
     pub fetch_proxy: Option<String>,
+    pub test_port: u16,
     pub refresh_default: Duration,
     pub fetch_timeout: Duration,
     pub fetch_max_bytes: usize,
@@ -42,6 +57,7 @@ impl Default for ServerConfig {
             nodes: Vec::new(),
             sing_box: None,
             fetch_proxy: None,
+            test_port: 3016,
             refresh_default: Duration::from_secs(6 * 3600),
             fetch_timeout: Duration::from_secs(20),
             fetch_max_bytes: 8 * 1024 * 1024,

@@ -16,10 +16,11 @@ const route = useRoute()
 const router = useRouter()
 
 const menuOptions: MenuOption[] = [
-  { label: '概览', key: '/' },
-  { label: '订阅', key: '/subscriptions' },
-  { label: '节点', key: '/nodes' },
-  { label: '设置', key: '/settings' },
+  { label: 'Overview', key: '/' },
+  { label: 'Proxies', key: '/proxies' },
+  { label: 'Subscriptions', key: '/subscriptions' },
+  { label: 'Machines', key: '/machines' },
+  { label: 'Settings', key: '/settings' },
 ]
 
 const activeKey = computed(() => route.path)

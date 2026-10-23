@@ -36,7 +36,7 @@ const form = reactive({
 
 const columns: DataTableColumns<Subscription> = [
   {
-    title: '名称',
+    title: 'Name',
     key: 'name',
     render: (row) =>
       h('div', [
@@ -45,40 +45,40 @@ const columns: DataTableColumns<Subscription> = [
       ]),
   },
   {
-    title: '格式',
+    title: 'Format',
     key: 'format',
     render: (row) =>
       h(NTag, { size: 'small' }, { default: () => `${row.format} / ${row.source}` }),
   },
-  { title: '节点', key: 'outboundCount', width: 70 },
+  { title: 'Nodes', key: 'outboundCount', width: 70 },
   {
-    title: '启用',
+    title: 'Enabled',
     key: 'enabled',
-    width: 70,
+    width: 80,
     render: (row) =>
       h(NSwitch, {
         value: row.enabled,
         onUpdateValue: (value: boolean) => toggle(row, value),
       }),
   },
-  { title: '周期', key: 'refreshIntervalSecs', width: 80, render: (row) => formatDuration(row.refreshIntervalSecs) },
-  { title: '上次刷新', key: 'lastFetchedAt', render: (row) => formatTimestamp(row.lastFetchedAt) },
+  { title: 'Interval', key: 'refreshIntervalSecs', width: 90, render: (row) => formatDuration(row.refreshIntervalSecs) },
+  { title: 'Last refresh', key: 'lastFetchedAt', render: (row) => formatTimestamp(row.lastFetchedAt) },
   {
-    title: '状态',
+    title: 'Status',
     key: 'lastError',
     render: (row) => {
       if (row.lastError) {
         return h(NTag, { type: 'error', size: 'small' }, { default: () => row.lastError })
       }
       return row.validated
-        ? h(NTag, { type: 'success', size: 'small' }, { default: () => 'sing-box check 通过' })
-        : h(NTag, { size: 'small' }, { default: () => '未校验' })
+        ? h(NTag, { type: 'success', size: 'small' }, { default: () => 'sing-box check passed' })
+        : h(NTag, { size: 'small' }, { default: () => 'not validated' })
     },
   },
   {
-    title: '操作',
+    title: 'Actions',
     key: 'actions',
-    width: 210,
+    width: 220,
     render: (row) =>
       h(NSpace, { size: 8 }, {
         default: () => [
@@ -89,13 +89,13 @@ const columns: DataTableColumns<Subscription> = [
               loading: busy.value === row.id,
               onClick: () => refresh(row),
             },
-            { default: () => '刷新' },
+            { default: () => 'Refresh' },
           ),
-          h(NButton, { size: 'small', onClick: () => openEdit(row) }, { default: () => '编辑' }),
+          h(NButton, { size: 'small', onClick: () => openEdit(row) }, { default: () => 'Edit' }),
           h(
             NButton,
             { size: 'small', type: 'error', ghost: true, onClick: () => remove(row) },
-            { default: () => '删除' },
+            { default: () => 'Delete' },
           ),
         ],
       }),
@@ -126,7 +126,7 @@ function openEdit(row: Subscription) {
 
 async function save() {
   if (!form.name.trim()) {
-    message.warning('请填写名称')
+    message.warning('Name is required')
     return
   }
 
@@ -142,7 +142,7 @@ async function save() {
       reportWarnings(mutation.warnings)
     } else {
       if (!form.url && !form.content) {
-        message.warning('URL 与粘贴内容至少填一个')
+        message.warning('Provide either a URL or pasted content')
         return
       }
       const mutation = await api.createSubscription({
@@ -156,8 +156,8 @@ async function save() {
       reportWarnings(mutation.warnings)
     }
     drawer.value = false
-    await Promise.all([store.loadSubscriptions(), store.loadRevision()])
-    message.success('已保存')
+    await Promise.all([store.loadSubscriptions(), store.loadProviders(), store.loadRevision()])
+    message.success('Saved')
   } catch (error) {
     message.error((error as Error).message)
   }
@@ -165,14 +165,14 @@ async function save() {
 
 function reportWarnings(warnings: string[]) {
   if (warnings.length > 0) {
-    message.warning(`导入完成，${warnings.length} 条节点被跳过：${warnings[0]}`)
+    message.warning(`Imported, skipped ${warnings.length} entry: ${warnings[0]}`)
   }
 }
 
 async function toggle(row: Subscription, enabled: boolean) {
   try {
     await api.patchSubscription(row.id, { enabled })
-    await Promise.all([store.loadSubscriptions(), store.loadRevision()])
+    await Promise.all([store.loadSubscriptions(), store.loadProviders(), store.loadRevision()])
   } catch (error) {
     message.error((error as Error).message)
   }
@@ -183,8 +183,8 @@ async function refresh(row: Subscription) {
   try {
     const mutation = await api.refreshSubscription(row.id)
     reportWarnings(mutation.warnings)
-    await Promise.all([store.loadSubscriptions(), store.loadRevision()])
-    message.success('已刷新')
+    await Promise.all([store.loadSubscriptions(), store.loadProviders(), store.loadRevision()])
+    message.success('Refreshed')
   } catch (error) {
     message.error((error as Error).message)
     await store.loadSubscriptions()
@@ -196,8 +196,8 @@ async function refresh(row: Subscription) {
 async function remove(row: Subscription) {
   try {
     await api.deleteSubscription(row.id)
-    await Promise.all([store.loadSubscriptions(), store.loadRevision()])
-    message.success('已删除')
+    await Promise.all([store.loadSubscriptions(), store.loadProviders(), store.loadRevision()])
+    message.success('Deleted')
   } catch (error) {
     message.error((error as Error).message)
   }
@@ -210,8 +210,8 @@ onMounted(() => {
 
 <template>
   <div class="toolbar">
-    <h2 style="margin: 0">订阅</h2>
-    <n-button type="primary" @click="openCreate">导入订阅</n-button>
+    <h2 style="margin: 0">Subscriptions</h2>
+    <n-button type="primary" @click="openCreate">Import</n-button>
   </div>
 
   <n-card>
@@ -219,29 +219,29 @@ onMounted(() => {
   </n-card>
 
   <n-drawer v-model:show="drawer" :width="520">
-    <n-drawer-content :title="editing ? `编辑 ${editing.name}` : '导入订阅'">
+    <n-drawer-content :title="editing ? `Edit ${editing.name}` : 'Import subscription'">
       <n-form label-placement="top">
-        <n-form-item label="名称">
-          <n-input v-model:value="form.name" placeholder="例如 机场A" />
+        <n-form-item label="Name">
+          <n-input v-model:value="form.name" placeholder="e.g. Provider A" />
         </n-form-item>
-        <n-form-item label="订阅 URL">
+        <n-form-item label="Subscription URL">
           <n-input
             v-model:value="form.url"
-            :placeholder="editing ? '留空表示不修改' : 'https://example.com/sub?token=…'"
+            :placeholder="editing ? 'Leave empty to keep the current one' : 'https://example.com/sub?token=…'"
           />
         </n-form-item>
-        <n-form-item v-if="!editing" label="或粘贴订阅内容">
+        <n-form-item v-if="!editing" label="Or paste subscription content">
           <n-input
             v-model:value="form.content"
             type="textarea"
             :rows="8"
-            placeholder="sing-box JSON / Clash YAML / base64 或明文 URI 列表"
+            placeholder="sing-box JSON / Clash YAML / base64 or plain URI list"
           />
         </n-form-item>
         <n-form-item label="User-Agent">
-          <n-input v-model:value="form.userAgent" placeholder="留空使用 sing-box/1.14.0" />
+          <n-input v-model:value="form.userAgent" placeholder="Default: sing-box/1.14.0" />
         </n-form-item>
-        <n-form-item label="自动刷新">
+        <n-form-item label="Auto refresh">
           <n-space align="center">
             <n-switch v-model:value="form.autoRefresh" />
             <n-input v-model:value="form.refreshInterval" style="width: 100px" placeholder="6h" />
@@ -250,8 +250,8 @@ onMounted(() => {
       </n-form>
       <template #footer>
         <n-space justify="end">
-          <n-button @click="drawer = false">取消</n-button>
-          <n-button type="primary" @click="save">保存</n-button>
+          <n-button @click="drawer = false">Cancel</n-button>
+          <n-button type="primary" @click="save">Save</n-button>
         </n-space>
       </template>
     </n-drawer-content>

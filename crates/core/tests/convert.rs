@@ -238,7 +238,7 @@ fn selection_revision_depends_on_node_and_selection() {
 #[test]
 fn slugify_and_unique_slug() {
     assert_eq!(slugify("Hong Kong 01"), "hong-kong-01");
-    assert_eq!(slugify("机场 A"), "a");
+    assert_eq!(slugify("Provider A"), "provider-a");
     assert_eq!(slugify("!!!"), "sub");
     assert_eq!(slugify("a-very-long-subscription-name"), "a-very-long-subs");
 

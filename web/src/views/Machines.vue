@@ -11,33 +11,37 @@ import {
   useMessage,
   type DataTableColumns,
 } from 'naive-ui'
-import { api, formatTimestamp, type NodeInfo } from '../api'
+import { api, formatLatency, formatTimestamp, type Machine } from '../api'
 import { usePortalStore } from '../stores/portal'
 
 const store = usePortalStore()
 const message = useMessage()
 const busy = ref<string | null>(null)
-
+const latency = ref<Record<string, number | null>>({})
 const selectionOptions = computed(() => [
-  { label: 's_auto（自动选优）', value: 's_auto' },
-  { label: 's_direct（直连）', value: 's_direct' },
+  { label: 's_auto (auto select)', value: 's_auto' },
+  { label: 's_direct (direct)', value: 's_direct' },
   ...store.outboundTags().map((tag) => ({ label: tag, value: tag })),
 ])
 
-const columns = computed<DataTableColumns<NodeInfo>>(() => [
-  { title: '节点', key: 'name' },
-  { title: 'Clash API', key: 'address', render: (row) => h(NText, { code: true }, { default: () => row.address }) },
+const columns = computed<DataTableColumns<Machine>>(() => [
+  { title: 'Machine', key: 'name' },
   {
-    title: '可达',
+    title: 'Clash API',
+    key: 'address',
+    render: (row) => h(NText, { code: true }, { default: () => row.address }),
+  },
+  {
+    title: 'Reachable',
     key: 'reachable',
-    width: 80,
+    width: 110,
     render: (row) =>
       h(NTag, { type: row.reachable ? 'success' : 'error', size: 'small' }, {
-        default: () => (row.reachable ? row.version ?? '在线' : '不可达'),
+        default: () => (row.reachable ? row.version ?? 'online' : 'unreachable'),
       }),
   },
   {
-    title: '出口',
+    title: 'Egress',
     key: 'selection',
     width: 260,
     render: (row) =>
@@ -50,24 +54,34 @@ const columns = computed<DataTableColumns<NodeInfo>>(() => [
       }),
   },
   {
-    title: '上报 revision',
+    title: 'Latency',
+    key: 'latency',
+    width: 110,
+    render: (row) => formatLatency(latency.value[row.name] ?? null),
+  },
+  {
+    title: 'Reported revision',
     key: 'reportedRevision',
     render: (row) => h(NText, { depth: 3 }, { default: () => row.report?.revision || '—' }),
   },
   {
-    title: '健康',
+    title: 'Health',
     key: 'health',
-    width: 180,
+    width: 190,
     render: (row) =>
       h(NTag, { size: 'small', type: healthType(row.report?.health ?? '') }, {
-        default: () => row.report?.health || '未上报',
+        default: () => row.report?.health || 'no report',
       }),
   },
-  { title: '最近上报', key: 'reportedAt', render: (row) => formatTimestamp(row.report?.reportedAt ?? null) },
   {
-    title: '操作',
+    title: 'Last report',
+    key: 'reportedAt',
+    render: (row) => formatTimestamp(row.report?.reportedAt ?? null),
+  },
+  {
+    title: 'Actions',
     key: 'actions',
-    width: 120,
+    width: 130,
     render: (row) =>
       h(
         NButton,
@@ -76,7 +90,7 @@ const columns = computed<DataTableColumns<NodeInfo>>(() => [
           loading: busy.value === row.name,
           onClick: () => test(row),
         },
-        { default: () => '测延迟' },
+        { default: () => 'Test latency' },
       ),
   },
 ])
@@ -88,25 +102,26 @@ function healthType(health: string): 'success' | 'warning' | 'error' | 'default'
   return 'error'
 }
 
-async function choose(node: NodeInfo, value: string) {
+async function choose(machine: Machine, value: string) {
   try {
-    const result = await api.setSelection(node.name, value)
-    await store.loadNodes()
+    const result = await api.setSelection(machine.name, value)
+    await store.loadMachines()
     if (result.applied) {
-      message.success(`${node.name} 已切换到 ${result.selection}`)
+      message.success(`${machine.name} switched to ${result.selection}`)
     } else {
-      message.warning(`${node.name} 暂不可达，已记录期望出口 ${result.selection}`)
+      message.warning(`${machine.name} is unreachable, desired egress queued: ${result.selection}`)
     }
   } catch (error) {
     message.error((error as Error).message)
   }
 }
 
-async function test(node: NodeInfo) {
-  busy.value = node.name
+async function test(machine: Machine) {
+  busy.value = machine.name
   try {
-    const result = await api.testDelay(node.name, node.selection)
-    message.success(`${node.selection}: ${result.delay} ms`)
+    const result = await api.runTest(machine.name, machine.selection, 'latency')
+    latency.value[machine.name] = result.latencyMs
+    message.success(`${machine.selection}: ${formatLatency(result.latencyMs)} via ${result.source}`)
   } catch (error) {
     message.error((error as Error).message)
   } finally {
@@ -115,19 +130,19 @@ async function test(node: NodeInfo) {
 }
 
 onMounted(() => {
-  Promise.all([store.loadSubscriptions(), store.loadNodes()]).catch(() => undefined)
+  Promise.all([store.loadSubscriptions(), store.loadMachines()]).catch(() => undefined)
 })
 </script>
 
 <template>
   <div class="toolbar">
-    <h2 style="margin: 0">节点</h2>
+    <h2 style="margin: 0">Machines</h2>
     <n-space>
-      <n-button @click="store.loadNodes()">刷新状态</n-button>
+      <n-button @click="store.loadMachines()">Refresh</n-button>
     </n-space>
   </div>
 
   <n-card>
-    <n-data-table :columns="columns" :data="store.nodes" :bordered="false" />
+    <n-data-table :columns="columns" :data="store.machines" :bordered="false" />
   </n-card>
 </template>

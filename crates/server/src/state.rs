@@ -12,6 +12,7 @@ pub struct AppState {
     config: Arc<ServerConfig>,
     store: Store,
     http: reqwest::Client,
+    test_http: reqwest::Client,
     proxy_http: Option<reqwest::Client>,
     refreshing: Arc<Mutex<HashSet<String>>>,
 }
@@ -25,6 +26,11 @@ impl AppState {
             .redirect(Policy::limited(3))
             .build()
             .expect("http client");
+
+        let test_http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(90))
+            .build()
+            .expect("test http client");
 
         let proxy_http = match &config.fetch_proxy {
             Some(proxy) => match reqwest::Proxy::all(proxy) {
@@ -48,6 +54,7 @@ impl AppState {
             config: Arc::new(config),
             store,
             http,
+            test_http,
             proxy_http,
             refreshing: Arc::new(Mutex::new(HashSet::new())),
         })
@@ -63,6 +70,10 @@ impl AppState {
 
     pub fn http(&self) -> &reqwest::Client {
         &self.http
+    }
+
+    pub fn test_http(&self) -> &reqwest::Client {
+        &self.test_http
     }
 
     pub fn proxy_http(&self) -> Option<&reqwest::Client> {

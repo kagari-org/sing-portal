@@ -56,6 +56,9 @@ struct ServeArgs {
 
     #[arg(long, env = "SING_PORTAL_STATIC_DIR")]
     static_dir: Option<PathBuf>,
+
+    #[arg(long, env = "SING_PORTAL_TEST_PORT", default_value_t = 3016)]
+    test_port: u16,
 }
 
 #[derive(Args)]
@@ -111,6 +114,40 @@ struct AgentArgs {
 
     #[arg(long = "best-effort")]
     best_effort: bool,
+
+    #[arg(long, env = "SING_PORTAL_TEST_LISTEN")]
+    test_listen: Option<SocketAddr>,
+
+    #[arg(
+        long,
+        env = "SING_PORTAL_PROXY_INBOUND",
+        default_value = "http://127.0.0.1:7897"
+    )]
+    proxy_inbound: String,
+
+    #[arg(
+        long,
+        env = "SING_PORTAL_TEST_LATENCY_URL",
+        default_value = "https://www.gstatic.com/generate_204"
+    )]
+    test_latency_url: String,
+
+    #[arg(
+        long,
+        env = "SING_PORTAL_TEST_DOWNLOAD_URL",
+        default_value = "https://speed.cloudflare.com/__down?bytes=10485760"
+    )]
+    test_download_url: String,
+
+    #[arg(
+        long,
+        env = "SING_PORTAL_TEST_MAX_BYTES",
+        default_value_t = 10 * 1024 * 1024
+    )]
+    test_max_bytes: usize,
+
+    #[arg(long, env = "SING_PORTAL_TEST_TIMEOUT", default_value = "20s")]
+    test_timeout: String,
 }
 
 #[tokio::main]
@@ -146,6 +183,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         fetch_max_bytes: args.fetch_max_bytes,
         static_dir: args.static_dir,
         embed_web: true,
+        test_port: args.test_port,
     };
 
     let state = AppState::new(config)
@@ -180,6 +218,14 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         once: args.once,
         best_effort: args.best_effort,
         health_timeout: parse_duration(&args.health_timeout).map_err(anyhow::Error::msg)?,
+        test_listen: args.test_listen,
+        tester: sing_portal_agent::tester::TesterConfig {
+            proxy_inbound: args.proxy_inbound,
+            latency_url: args.test_latency_url,
+            download_url: args.test_download_url,
+            max_bytes: args.test_max_bytes,
+            timeout: parse_duration(&args.test_timeout).map_err(anyhow::Error::msg)?,
+        },
     };
 
     let agent = sing_portal_agent::Agent::new(config).context("cannot create agent")?;

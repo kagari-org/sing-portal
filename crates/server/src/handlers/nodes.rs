@@ -160,6 +160,9 @@ pub async fn test(
         )));
     }
 
+    let lock = state.test_lock(&name).await;
+    let _guard = lock.lock().await;
+
     let agent_url = format!(
         "http://{}:{}/test/{}",
         node.host(),

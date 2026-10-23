@@ -62,7 +62,10 @@ const columns = computed<DataTableColumns<Machine>>(() => [
   {
     title: 'Reported revision',
     key: 'reportedRevision',
-    render: (row) => h(NText, { depth: 3 }, { default: () => row.report?.revision || '—' }),
+    render: (row) =>
+      h(NText, { depth: 3, title: row.report?.revision || '' }, {
+        default: () => shortRevision(row.report?.revision),
+      }),
   },
   {
     title: 'Health',
@@ -94,6 +97,12 @@ const columns = computed<DataTableColumns<Machine>>(() => [
       ),
   },
 ])
+
+function shortRevision(revision: string | null | undefined): string {
+  if (!revision) return '—'
+  if (revision.length <= 18) return revision
+  return `${revision.slice(0, 18)}…`
+}
 
 function healthType(health: string): 'success' | 'warning' | 'error' | 'default' {
   if (health === 'ok') return 'success'

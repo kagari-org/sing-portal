@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use reqwest::redirect::Policy;
@@ -15,6 +15,7 @@ pub struct AppState {
     test_http: reqwest::Client,
     proxy_http: Option<reqwest::Client>,
     refreshing: Arc<Mutex<HashSet<String>>>,
+    test_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 impl AppState {
@@ -57,6 +58,7 @@ impl AppState {
             test_http,
             proxy_http,
             refreshing: Arc::new(Mutex::new(HashSet::new())),
+            test_locks: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -82,6 +84,14 @@ impl AppState {
 
     pub fn node(&self, name: &str) -> Option<&NodeConfig> {
         self.config.nodes.iter().find(|node| node.name == name)
+    }
+
+    pub async fn test_lock(&self, node: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.test_locks.lock().await;
+        locks
+            .entry(node.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     pub async fn begin_refresh(&self, id: &str) -> bool {

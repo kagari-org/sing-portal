@@ -32,8 +32,12 @@ interface Row extends ProviderNode {
 const store = usePortalStore()
 const message = useMessage()
 const testMachine = ref<string | null>(null)
-const results = reactive<Record<string, Measurement>>({})
+const latency = reactive<Record<string, Measurement>>({})
+const bandwidth = reactive<Record<string, Measurement>>({})
+const errors = reactive<Record<string, string>>({})
 const busy = ref<string | null>(null)
+const bulk = ref<TestKind | null>(null)
+const progress = ref({ done: 0, total: 0 })
 
 const machineOptions = computed(() =>
   store.machines.map((machine) => ({
@@ -49,6 +53,17 @@ const providers = computed<Provider[]>(() =>
   }),
 )
 
+const rows = computed<Row[]>(() =>
+  providers.value.flatMap((provider) =>
+    provider.nodes.map((node) => ({
+      ...node,
+      providerName: provider.name,
+      providerSlug: provider.slug,
+      providerEnabled: provider.enabled,
+    })),
+  ),
+)
+
 const columns: DataTableColumns<Row> = [
   {
     title: 'Node',
@@ -57,7 +72,9 @@ const columns: DataTableColumns<Row> = [
       h(NSpace, { size: 6, align: 'center' }, {
         default: () => [
           h(NText, { code: true }, { default: () => row.tag }),
-          row.providerEnabled ? null : h(NTag, { size: 'small', type: 'warning' }, { default: () => 'disabled' }),
+          row.providerEnabled
+            ? null
+            : h(NTag, { size: 'small', type: 'warning' }, { default: () => 'disabled' }),
         ],
       }),
   },
@@ -70,11 +87,13 @@ const columns: DataTableColumns<Row> = [
   {
     title: 'Latency',
     key: 'latency',
-    width: 140,
+    width: 170,
     render: (row) => {
-      const result = results[keyOf(row)]
-      if (result?.kind === 'latency') {
-        return h(NText, { depth: 2 }, { default: () => `${formatLatency(result.latencyMs)} (${result.source})` })
+      const result = latency[keyOf(row)]
+      if (result) {
+        return h(NText, { depth: 2 }, {
+          default: () => `${formatLatency(result.latencyMs)} (${result.source})`,
+        })
       }
       return h(NText, { depth: 3 }, { default: () => '—' })
     },
@@ -84,9 +103,15 @@ const columns: DataTableColumns<Row> = [
     key: 'bandwidth',
     width: 200,
     render: (row) => {
-      const result = results[keyOf(row)]
-      if (result?.kind === 'bandwidth') {
+      const result = bandwidth[keyOf(row)]
+      if (result) {
         return h(NText, { depth: 2 }, { default: () => formatMbps(result.downMbps) })
+      }
+      const error = errors[keyOf(row)]
+      if (error) {
+        return h(NText, { type: 'error', style: 'font-size: 12px' }, {
+          default: () => error,
+        })
       }
       return h(NText, { depth: 3 }, { default: () => '—' })
     },
@@ -116,11 +141,21 @@ function testButton(row: Row, kind: TestKind, label: string) {
     {
       size: 'small',
       loading: busy.value === key,
-      disabled: !testMachine.value,
+      disabled: !testMachine.value || bulk.value !== null,
       onClick: () => runTest(row, kind),
     },
     { default: () => label },
   )
+}
+
+function remember(row: Row, kind: TestKind, result: Measurement) {
+  const key = keyOf(row)
+  delete errors[key]
+  if (kind === 'latency') {
+    latency[key] = result
+  } else {
+    bandwidth[key] = result
+  }
 }
 
 async function runTest(row: Row, kind: TestKind) {
@@ -132,22 +167,62 @@ async function runTest(row: Row, kind: TestKind) {
   busy.value = key
   try {
     const result = await api.runTest(testMachine.value, row.tag, kind)
-    results[keyOf(row)] = result
+    remember(row, kind, result)
     if (kind === 'latency') {
       message.success(`${row.tag}: ${formatLatency(result.latencyMs)} via ${result.source}`)
     } else {
       message.success(`${row.tag}: ${formatMbps(result.downMbps)}`)
     }
   } catch (error) {
+    errors[keyOf(row)] = (error as Error).message
     message.error((error as Error).message)
   } finally {
     busy.value = null
   }
 }
 
+async function runAll(kind: TestKind) {
+  if (!testMachine.value) {
+    message.warning('Pick a machine to run the tests on')
+    return
+  }
+
+  const targets = rows.value.filter((row) => row.providerEnabled)
+  if (!targets.length) {
+    message.warning('No proxies to test')
+    return
+  }
+
+  bulk.value = kind
+  progress.value = { done: 0, total: targets.length }
+  let failed = 0
+
+  try {
+    for (const row of targets) {
+      try {
+        const result = await api.runTest(testMachine.value, row.tag, kind)
+        remember(row, kind, result)
+      } catch (error) {
+        failed += 1
+        errors[keyOf(row)] = (error as Error).message
+      }
+      progress.value = { done: progress.value.done + 1, total: targets.length }
+    }
+  } finally {
+    bulk.value = null
+  }
+
+  if (failed) {
+    message.warning(`${kind} test finished: ${targets.length - failed} ok, ${failed} failed`)
+  } else {
+    message.success(`${kind} test finished for ${targets.length} proxies`)
+  }
+}
+
 onMounted(async () => {
   await Promise.all([store.loadProviders(), store.loadMachines()])
-  testMachine.value = store.machines.find((machine) => machine.reachable)?.name ?? store.machines[0]?.name ?? null
+  testMachine.value =
+    store.machines.find((machine) => machine.reachable)?.name ?? store.machines[0]?.name ?? null
 })
 </script>
 
@@ -163,6 +238,26 @@ onMounted(async () => {
         style="width: 200px"
         placeholder="no machines"
       />
+      <n-button
+        size="small"
+        type="primary"
+        :loading="bulk === 'latency'"
+        :disabled="bulk !== null || busy !== null"
+        @click="runAll('latency')"
+      >
+        Test all latency
+      </n-button>
+      <n-button
+        size="small"
+        :loading="bulk === 'bandwidth'"
+        :disabled="bulk !== null || busy !== null"
+        @click="runAll('bandwidth')"
+      >
+        Test all bandwidth
+      </n-button>
+      <n-text v-if="bulk" depth="3">
+        {{ progress.done }}/{{ progress.total }}
+      </n-text>
       <n-button size="small" @click="store.loadProviders()">Reload</n-button>
     </n-space>
   </div>
@@ -179,7 +274,7 @@ onMounted(async () => {
           </n-space>
         </template>
         <template #header-extra>
-          <n-text v-if="provider.lastError" depth="3" type="error">
+          <n-text v-if="provider.lastError" type="error" depth="3">
             {{ provider.lastError }}
           </n-text>
         </template>

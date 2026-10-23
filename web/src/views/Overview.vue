@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import {
   NAlert,
   NCard,
@@ -20,11 +20,25 @@ onMounted(() => {
   store.refreshAll().catch(() => undefined)
 })
 
+const proxyCount = computed(() =>
+  store.providers
+    .filter((provider) => provider.enabled)
+    .reduce((total, provider) => total + provider.nodes.length, 0),
+)
+
+const activeProviders = computed(() => store.providers.filter((provider) => provider.enabled).length)
+
 function healthType(health: string): 'success' | 'warning' | 'error' | 'default' {
   if (health === 'ok') return 'success'
   if (health === 'no_active_subscriptions') return 'warning'
   if (health === '') return 'default'
   return 'error'
+}
+
+function shortRevision(revision: string | null | undefined): string {
+  if (!revision) return '—'
+  if (revision.length <= 18) return revision
+  return `${revision.slice(0, 18)}…`
 }
 </script>
 
@@ -36,17 +50,16 @@ function healthType(health: string): 'success' | 'warning' | 'error' | 'default'
 
     <n-grid cols="1 640:3" :x-gap="16" :y-gap="16">
       <n-grid-item>
-        <n-card title="Outbound revision">
-          <n-statistic :value="store.revision?.revision ?? '—'" />
+        <n-card title="Proxies">
+          <n-statistic :value="proxyCount" />
           <n-text depth="3">
-            {{ store.revision?.outbounds ?? 0 }} nodes · {{ store.revision?.enabledSubscriptions ?? 0 }}
-            active subscriptions
+            {{ activeProviders }} of {{ store.providers.length }} subscriptions active
           </n-text>
         </n-card>
       </n-grid-item>
       <n-grid-item>
         <n-card title="Subscriptions">
-          <n-statistic :value="String(store.subscriptions.length)" />
+          <n-statistic :value="store.subscriptions.length" />
           <n-text depth="3">
             {{ store.subscriptions.filter((item) => item.enabled).length }} active ·
             {{ store.subscriptions.filter((item) => item.lastError).length }} failing
@@ -55,7 +68,7 @@ function healthType(health: string): 'success' | 'warning' | 'error' | 'default'
       </n-grid-item>
       <n-grid-item>
         <n-card title="Machines">
-          <n-statistic :value="String(store.machines.filter((item) => item.reachable).length)" />
+          <n-statistic :value="store.machines.filter((item) => item.reachable).length" />
           <n-text depth="3">Clash API reachable out of {{ store.machines.length }}</n-text>
         </n-card>
       </n-grid-item>
@@ -69,7 +82,7 @@ function healthType(health: string): 'success' | 'warning' | 'error' | 'default'
             <th>Address</th>
             <th>Reachable</th>
             <th>Egress</th>
-            <th>Reported revision</th>
+            <th>Revision</th>
             <th>Health</th>
             <th>Last report</th>
           </tr>
@@ -84,7 +97,11 @@ function healthType(health: string): 'success' | 'warning' | 'error' | 'default'
               </n-tag>
             </td>
             <td>{{ machine.selection }}</td>
-            <td><n-text depth="3">{{ machine.report?.revision || '—' }}</n-text></td>
+            <td>
+              <n-text depth="3" :title="machine.report?.revision || ''">
+                {{ shortRevision(machine.report?.revision) }}
+              </n-text>
+            </td>
             <td>
               <n-tag :type="healthType(machine.report?.health ?? '')" size="small">
                 {{ machine.report?.health || 'no report' }}

@@ -452,3 +452,18 @@ async fn test_endpoint_validates_kind_and_tags() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+#[tokio::test]
+async fn test_lock_is_shared_per_machine() {
+    let app = app().await;
+    let first = app.state.test_lock("home").await;
+    let second = app.state.test_lock("home").await;
+    other(&app, &first).await;
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+}
+
+#[allow(dead_code)]
+async fn other(app: &TestApp, first: &std::sync::Arc<tokio::sync::Mutex<()>>) {
+    let third = app.state.test_lock("other").await;
+    assert!(!std::sync::Arc::ptr_eq(first, &third));
+}

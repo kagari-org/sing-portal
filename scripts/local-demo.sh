@@ -31,7 +31,7 @@ json() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(s);const f=process.argv[1].split(".");let o=v;for(const k of f)o=o?.[k];console.log(typeof o==="object"?JSON.stringify(o,null,1):o)})' "$1"
 }
 
-echo "== start mocks and services"
+echo "== start mock clash and portal"
 MOCK_CLASH_PORT="$clash_port" node "$root/scripts/mock-clash.mjs" >"$work/clash.log" 2>&1 &
 pids+=($!)
 
@@ -48,6 +48,16 @@ for _ in $(seq 1 50); do
 done
 curl -fsS "$portal/api/healthz" >/dev/null
 
+echo
+echo "== import fixtures/sub-uri.txt"
+node -e 'const fs=require("fs");process.stdout.write(JSON.stringify({name:"Provider A",content:fs.readFileSync(process.argv[1],"utf8")}))' \
+  "$root/fixtures/sub-uri.txt" >"$work/create.json"
+curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
+  --data @"$work/create.json" "$portal/api/subscriptions" |
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log({format:j.subscription.format,nodes:j.subscription.outboundCount,validated:j.subscription.validated,warnings:j.warnings.length})})'
+
+echo
+echo "== start the agent (it dials the portal and registers itself)"
 "$binary" agent \
   --portal "$portal" \
   --name home \
@@ -67,43 +77,13 @@ for _ in $(seq 1 100); do
 done
 
 echo
-echo "== import fixtures/sub-uri.txt"
-node -e 'const fs=require("fs");process.stdout.write(JSON.stringify({name:"Provider A",content:fs.readFileSync(process.argv[1],"utf8")}))' \
-  "$root/fixtures/sub-uri.txt" >"$work/create.json"
-curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
-  --data @"$work/create.json" "$portal/api/subscriptions" |
-  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log({format:j.subscription.format,nodes:j.subscription.outboundCount,validated:j.subscription.validated,warnings:j.warnings.length})})'
-
-echo
 echo "== GET /api/providers (nodes grouped by subscription)"
 curl -fsS "$portal/api/providers" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const p=JSON.parse(s)[0];console.log({provider:p.name,slug:p.slug,nodes:p.nodes.length,first:p.nodes[0].tag})})'
 
 echo
-echo "== pin the machine to manual, then switch egress"
-curl -fsS -X PUT -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
-  --data '{"mode":"manual"}' "$portal/api/nodes/home/mode"
-echo
-curl -fsS -X PUT -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
-  --data '{"outbound":"provider-a · HY2"}' "$portal/api/nodes/home/selection"
-echo
-
-echo
-echo "== latency test (clash api delay on the agent)"
-curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
-  --data '{"tag":"provider-a · HY2","kind":"latency"}' "$portal/api/nodes/home/test"
-echo
-
-echo "== bandwidth test (sing-box api networkquality on the agent)"
-curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
-  --data '{"tag":"provider-a · HY2","kind":"bandwidth"}' "$portal/api/nodes/home/test"
-echo
-
-echo
-echo "== hand the machine back to auto: agent probes every node, portal scores and switches"
-curl -fsS -X PUT -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
-  --data '{"mode":"auto"}' "$portal/api/nodes/home/mode"
-echo
-for _ in $(seq 1 100); do
+echo "== auto selection: agent probes every node, portal scores and picks"
+curl -fsS -X POST -H 'X-Portal-Request: 1' "$portal/api/nodes/home/auto" >/dev/null
+for _ in $(seq 1 150); do
   count="$(curl -fsS "$portal/api/nodes/home/measurements" |
     node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).length))')"
   if [ "$count" -gt 0 ]; then break; fi
@@ -114,9 +94,25 @@ curl -fsS "$portal/api/nodes/home/measurements" |
 curl -fsS "$portal/api/nodes" |
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const n=JSON.parse(s)[0];console.log({mode:n.mode,selection:n.selection,score:n.score===null?null:Number(n.score.toFixed(1)),best:n.best})})'
 
+selected="$(curl -fsS "$portal/api/nodes" |
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s)[0].selection))')"
+
+echo
+echo "== latency test on the auto-selected node ($selected)"
+node -e 'process.stdout.write(JSON.stringify({ tag: process.argv[1], kind: "latency" }))' "$selected" >"$work/payload.json"
+curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
+  --data @"$work/payload.json" "$portal/api/nodes/home/test"
+echo
+
+echo "== bandwidth test through the sing-box api ($selected)"
+node -e 'process.stdout.write(JSON.stringify({ tag: process.argv[1], kind: "bandwidth" }))' "$selected" >"$work/payload.json"
+curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
+  --data @"$work/payload.json" "$portal/api/nodes/home/test"
+echo
+
 echo
 echo "== wait for the agent sync to land"
-for _ in $(seq 1 50); do
+for _ in $(seq 1 100); do
   if curl -fsS "$portal/api/nodes" | grep -q '"health":"ok"'; then break; fi
   sleep 0.2
 done
@@ -132,7 +128,7 @@ json appliedSelection <"$work/state/state.json"
 
 echo
 echo "== portal view of the machine"
-curl -fsS "$portal/api/nodes" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const n=JSON.parse(s)[0];console.log({name:n.name,reachable:n.reachable,selection:n.selection,health:n.report?.health,revision:n.report?.revision})})'
+curl -fsS "$portal/api/nodes" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const n=JSON.parse(s)[0];console.log({name:n.name,reachable:n.reachable,mode:n.mode,selection:n.selection,health:n.report?.health,revision:n.report?.revision})})'
 
 echo
 echo "OK. UI: $portal"

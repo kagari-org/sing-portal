@@ -134,11 +134,13 @@ impl Agent {
                 match self.tester.measure(&tag, kind, url.as_deref()).await {
                     Ok(measurement) => AgentMessage::TestResult {
                         id,
+                        kind: measurement.kind,
                         latency_ms: measurement.latency_ms,
+                        down_mbps: measurement.down_mbps,
+                        up_mbps: measurement.up_mbps,
+                        responsiveness: measurement.responsiveness,
                         bytes: measurement.bytes,
                         seconds: measurement.seconds,
-                        down_mbps: measurement.down_mbps,
-                        restored: measurement.restored,
                     },
                     Err(error) => AgentMessage::Error {
                         id: Some(id),

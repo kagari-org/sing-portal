@@ -257,21 +257,24 @@ pub async fn probe(
 
     match state.registry().request(machine, message, timeout).await? {
         AgentMessage::TestResult {
+            kind: reported_kind,
             latency_ms,
+            down_mbps,
+            up_mbps,
+            responsiveness,
             bytes,
             seconds,
-            down_mbps,
-            restored,
             ..
         } => Ok(crate::handlers::views::TestResponse {
             tag: tag.to_string(),
-            kind: kind.to_string(),
+            kind: reported_kind,
             latency_ms,
+            down_mbps,
+            up_mbps,
+            responsiveness,
             bytes,
             seconds,
-            down_mbps,
             source: "agent".to_string(),
-            restored: Some(restored),
         }),
         AgentMessage::Error { message, .. } => Err(ApiError::Upstream(message)),
         other => Err(ApiError::Upstream(format!(

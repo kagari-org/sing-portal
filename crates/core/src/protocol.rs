@@ -60,11 +60,13 @@ pub enum AgentMessage {
     },
     TestResult {
         id: String,
+        kind: String,
         latency_ms: Option<f64>,
+        down_mbps: Option<f64>,
+        up_mbps: Option<f64>,
+        responsiveness: Option<f64>,
         bytes: Option<u64>,
         seconds: Option<f64>,
-        down_mbps: Option<f64>,
-        restored: String,
     },
     SelectResult {
         id: String,
@@ -125,11 +127,13 @@ mod tests {
 
         let result = AgentMessage::TestResult {
             id: "42".into(),
+            kind: "both".into(),
             latency_ms: Some(12.5),
+            down_mbps: Some(16.0),
+            up_mbps: None,
+            responsiveness: None,
             bytes: Some(1024),
             seconds: Some(0.5),
-            down_mbps: Some(16.0),
-            restored: "s_auto".into(),
         };
         assert_eq!(result.id(), Some("42"));
 

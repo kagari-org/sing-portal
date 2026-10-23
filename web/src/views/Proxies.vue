@@ -107,7 +107,11 @@ const columns: DataTableColumns<Row> = [
     render: (row) => {
       const result = bandwidth[keyOf(row)]
       if (result) {
-        return h(NText, { depth: 2 }, { default: () => formatMbps(result.downMbps) })
+        const text =
+          result.upMbps === null
+            ? formatMbps(result.downMbps)
+            : `${formatMbps(result.downMbps)} / ${formatMbps(result.upMbps)}`
+        return h(NText, { depth: 2 }, { default: () => text })
       }
       const error = errors[keyOf(row)]
       if (error) {

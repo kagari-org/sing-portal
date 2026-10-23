@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local end-to-end run: mock Clash API + mock proxy inbound + portal + one agent.
+# Local end-to-end run: mock Clash API + portal + one agent.
 # Everything is throwaway: state lives in .tmp/local and processes are killed on exit.
 set -euo pipefail
 
@@ -7,7 +7,6 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 work="${WORKDIR:-$root/.tmp/local}"
 portal_port="${PORTAL_PORT:-3915}"
 clash_port="${CLASH_PORT:-9090}"
-proxy_port="${PROXY_PORT:-7898}"
 binary="${SING_PORTAL_BIN:-$root/target/debug/sing-portal}"
 portal="http://127.0.0.1:$portal_port"
 
@@ -36,17 +35,12 @@ echo "== start mocks and services"
 MOCK_CLASH_PORT="$clash_port" node "$root/scripts/mock-clash.mjs" >"$work/clash.log" 2>&1 &
 pids+=($!)
 
-MOCK_PROXY_PORT="$proxy_port" node "$root/scripts/mock-proxy.mjs" >"$work/proxy.log" 2>&1 &
-pids+=($!)
-
 "$binary" serve \
   --listen "127.0.0.1:$portal_port" \
   --db "$work/portal.db" \
   --sing-box "$root/scripts/fake-sing-box.sh" \
   >"$work/portal.log" 2>&1 &
 pids+=($!)
-
-
 
 for _ in $(seq 1 50); do
   if curl -fsS "$portal/api/healthz" >/dev/null 2>&1; then break; fi
@@ -64,9 +58,6 @@ curl -fsS "$portal/api/healthz" >/dev/null
   --clash "http://127.0.0.1:$clash_port" \
   --restart-cmd "" \
   --interval 3s \
-  --proxy-inbound "http://127.0.0.1:$proxy_port" \
-  --test-latency-url "http://probe.invalid/" \
-  --test-download-url "http://speed.invalid/payload" \
   >"$work/agent.log" 2>&1 &
 pids+=($!)
 for _ in $(seq 1 100); do
@@ -107,12 +98,12 @@ curl -fsS -X PUT -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
 echo
 
 echo
-echo "== latency test (runs on the agent, through its proxy inbound)"
+echo "== latency test (clash api delay on the agent)"
 curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
   --data '{"tag":"provider-a · HY2","kind":"latency"}' "$portal/api/nodes/home/test"
 echo
 
-echo "== bandwidth test (runs on the agent, through its proxy inbound)"
+echo "== bandwidth test (sing-box tools networkquality on the agent)"
 curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
   --data '{"tag":"provider-a · HY2","kind":"bandwidth"}' "$portal/api/nodes/home/test"
 echo

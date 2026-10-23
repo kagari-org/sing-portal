@@ -129,13 +129,6 @@ struct AgentArgs {
 
     #[arg(
         long,
-        env = "SING_PORTAL_PROXY_INBOUND",
-        default_value = "http://127.0.0.1:7897"
-    )]
-    proxy_inbound: String,
-
-    #[arg(
-        long,
         env = "SING_PORTAL_TEST_LATENCY_URL",
         default_value = "https://www.gstatic.com/generate_204"
     )]
@@ -157,6 +150,13 @@ struct AgentArgs {
 
     #[arg(long, env = "SING_PORTAL_TEST_TIMEOUT", default_value = "20s")]
     test_timeout: String,
+
+    #[arg(
+        long,
+        env = "SING_PORTAL_TEST_NQ_RUNTIME",
+        default_value_t = 8
+    )]
+    test_nq_runtime: u64,
 }
 
 #[tokio::main]
@@ -220,8 +220,8 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         node_name: args.node,
         template_path: args.template,
         config_path: args.config,
-        state_dir: args.state_dir,
-        sing_box_bin: args.sing_box,
+        state_dir: args.state_dir.clone(),
+        sing_box_bin: args.sing_box.clone(),
         clash_url: args.clash,
         restart_cmd: if args.restart_cmd.is_empty() {
             None
@@ -233,11 +233,13 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         best_effort: args.best_effort,
         health_timeout: parse_duration(&args.health_timeout).map_err(anyhow::Error::msg)?,
         tester: sing_portal_agent::tester::TesterConfig {
-            proxy_inbound: args.proxy_inbound,
+            sing_box: args.sing_box.clone().into(),
+            state_dir: args.state_dir.clone(),
             latency_url: args.test_latency_url,
             download_url: args.test_download_url,
-            max_bytes: args.test_max_bytes,
+            max_bytes: args.test_max_bytes as u64,
             timeout: parse_duration(&args.test_timeout).map_err(anyhow::Error::msg)?,
+            network_quality_runtime: args.test_nq_runtime,
         },
     };
 

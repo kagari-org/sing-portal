@@ -163,9 +163,10 @@ pub struct TestResponse {
     pub tag: String,
     pub kind: String,
     pub latency_ms: Option<f64>,
+    pub down_mbps: Option<f64>,
+    pub up_mbps: Option<f64>,
+    pub responsiveness: Option<f64>,
     pub bytes: Option<u64>,
     pub seconds: Option<f64>,
-    pub down_mbps: Option<f64>,
     pub source: String,
-    pub restored: Option<String>,
 }

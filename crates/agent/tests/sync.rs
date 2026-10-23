@@ -71,7 +71,11 @@ async fn fixture(portal: String) -> Fixture {
         once: true,
         best_effort: false,
         health_timeout: Duration::from_millis(600),
-        tester: sing_portal_agent::tester::TesterConfig::default(),
+        tester: sing_portal_agent::tester::TesterConfig {
+            sing_box: fake_sing_box(&dir).into(),
+            state_dir: dir.path().join("state"),
+            ..Default::default()
+        },
     };
 
     Fixture { dir, config, clash }

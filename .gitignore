@@ -1,0 +1,10 @@
+/target
+/.direnv
+/result
+/node_modules
+/web/node_modules
+/web/dist
+/web/.yarn/install-state.gz
+/web/.yarn/cache
+/web/.pnp*
+/.tmp

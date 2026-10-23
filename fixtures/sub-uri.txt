@@ -1,0 +1,10 @@
+vmess://eyJ2IjoiMiIsInBzIjoiVk1FU1MgV1MiLCJhZGQiOiJ2bWVzcy5leGFtcGxlLmNvbSIsInBvcnQiOiI0NDMiLCJpZCI6ImI4MzEzODFkLTYzMjQtNGQ1My1hZDRmLThjZGE0OGIzMDgxMSIsImFpZCI6IjAiLCJzY3kiOiJhdXRvIiwibmV0Ijoid3MiLCJ0eXBlIjoibm9uZSIsImhvc3QiOiJjZG4uZXhhbXBsZS5jb20iLCJwYXRoIjoiL3JheSIsInRscyI6InRscyIsInNuaSI6ImNkbi5leGFtcGxlLmNvbSIsImFscG4iOiJoMixodHRwLzEuMSIsImZwIjoiY2hyb21lIn0=
+vless://b831381d-6324-4d53-ad4f-8cda48b30811@vless.example.com:443?type=grpc&security=reality&sni=vless.example.com&fp=chrome&pbk=PUBKEY&sid=abcd&serviceName=grpcsvc&flow=xtls-rprx-vision#VLESS%20REALITY
+ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@ss.example.com:8388?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dexample.com#SS%20OBFS
+ss://YWVzLTI1Ni1nY206cGFzc3dvcmRAc3MyLmV4YW1wbGUuY29tOjgzODk=#SS%20LEGACY
+trojan://pa%24%24word@trojan.example.com:443?type=ws&path=%2Ftj&host=trojan.example.com&sni=trojan.example.com&allowInsecure=1#TROJAN%20WS
+hysteria2://hunter2@hy2.example.com:8443?obfs=salamander&obfs-password=obfspw&sni=hy2.example.com&insecure=1#HY2
+tuic://b831381d-6324-4d53-ad4f-8cda48b30811:tuicpass@tuic.example.com:443?congestion_control=bbr&udp_relay_mode=native&sni=tuic.example.com&alpn=h3#TUIC
+anytls://anypass@anytls.example.com:443?sni=anytls.example.com&insecure=1#ANYTLS
+socks5://sockuser:sockpass@socks.example.com:1080#SOCKS
+http://httpuser:httppass@http.example.com:8080#HTTP

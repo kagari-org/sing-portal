@@ -1,0 +1,76 @@
+mixed-port: 7890
+allow-lan: false
+proxies:
+  - name: SS-NODE
+    type: ss
+    server: ss.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: ss-pass
+    plugin: obfs
+    plugin-opts:
+      mode: http
+      host: bing.com
+
+  - name: VMESS-WS
+    type: vmess
+    server: vmess.example.com
+    port: 443
+    uuid: b831381d-6324-4d53-ad4f-8cda48b30811
+    alterId: 0
+    cipher: auto
+    tls: true
+    servername: cdn.example.com
+    network: ws
+    ws-opts:
+      path: /ray
+      headers:
+        Host: cdn.example.com
+
+  - name: TROJAN-H2
+    type: trojan
+    server: trojan.example.com
+    port: 443
+    password: trojan-pass
+    sni: trojan.example.com
+    skip-cert-verify: true
+    alpn:
+      - h2
+      - http/1.1
+    network: h2
+    h2-opts:
+      path: /tunnel
+      host:
+        - trojan.example.com
+
+  - name: VLESS-REALITY
+    type: vless
+    server: vless.example.com
+    port: 443
+    uuid: b831381d-6324-4d53-ad4f-8cda48b30811
+    flow: xtls-rprx-vision
+    tls: true
+    servername: www.microsoft.com
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: PUBKEY
+      short-id: abcd
+    network: grpc
+    grpc-opts:
+      grpc-service-name: grpcsvc
+
+  - name: UNSUPPORTED
+    type: wireguard
+    server: wg.example.com
+    port: 51820
+
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - SS-NODE
+      - VMESS-WS
+
+rules:
+  - DOMAIN-SUFFIX,google.com,PROXY
+  - MATCH,DIRECT

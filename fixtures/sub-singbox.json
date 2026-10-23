@@ -1,0 +1,37 @@
+{
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "s_select",
+      "outbounds": ["US 01", "JP 02"]
+    },
+    {
+      "type": "vless",
+      "tag": "US 01",
+      "server": "us.example.com",
+      "server_port": 443,
+      "uuid": "b831381d-6324-4d53-ad4f-8cda48b30811",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "us.example.com"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "JP 02",
+      "server": "jp.example.com",
+      "server_port": 8443,
+      "password": "jp-pass",
+      "tls": {
+        "enabled": true,
+        "server_name": "jp.example.com",
+        "insecure": true
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ]
+}

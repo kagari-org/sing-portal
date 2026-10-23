@@ -39,7 +39,7 @@ tempfile = "3"
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "macros"] }
 tokio-tungstenite = { version = "0.26", features = ["connect", "handshake"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "process", "fs"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "process", "fs"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"

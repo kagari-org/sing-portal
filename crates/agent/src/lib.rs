@@ -191,9 +191,12 @@ impl Agent {
         let mut applied = false;
 
         let empty = revision == "none" || outbounds.is_empty();
+        let config_missing = !tokio::fs::try_exists(&self.config.config_path)
+            .await
+            .unwrap_or(false);
         if empty {
             health = "no_active_subscriptions".to_string();
-        } else if revision != local.applied_revision {
+        } else if revision != local.applied_revision || config_missing {
             match apply::apply(&self.config, &outbounds, &self.api).await {
                 Ok(()) => {
                     local.applied_revision = revision.clone();

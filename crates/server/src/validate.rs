@@ -14,7 +14,10 @@ pub async fn check(state: &AppState, outbounds: &[Value]) -> ApiResult<bool> {
     let config = render(&json!({ "log": { "level": "warn" } }), outbounds)
         .map_err(ApiError::from_core)?;
 
-    let mut file = tempfile::NamedTempFile::new()
+    let mut file = tempfile::Builder::new()
+        .prefix("sing-portal-check-")
+        .suffix(".json")
+        .tempfile_in(temp_dir(state))
         .map_err(|error| ApiError::Internal(format!("cannot create temp file: {error}")))?;
     file.write_all(&to_bytes(&config))
         .and_then(|()| file.flush())
@@ -52,4 +55,14 @@ fn summarize(stderr: &str) -> String {
     } else {
         summarized
     }
+}
+
+fn temp_dir(state: &AppState) -> std::path::PathBuf {
+    state
+        .config()
+        .db_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir)
 }

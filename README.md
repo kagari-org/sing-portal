@@ -34,12 +34,57 @@ cargo build --release
 # 产物：target/release/sing-portal
 ```
 
-开发前端时用 Vite：
+开发前端时用 Vite（它把 `/api` 代理到 `127.0.0.1:3015`，所以 portal 用默认端口起就行）：
 
 ```bash
-cd web && node .yarn/releases/yarn-4.18.0.cjs dev   # :5173，/api 代理到 127.0.0.1:3015
-cargo run -- serve --static-dir web/dist             # 或直接用内嵌资源
+cd web && node .yarn/releases/yarn-4.18.0.cjs dev    # http://127.0.0.1:5173
+cargo run -- serve                                   # 另一个终端，默认 127.0.0.1:3015
 ```
+
+## 本地测试（不需要真节点）
+
+`scripts/local-demo.sh` 会起一个 mock Clash API、用假 sing-box 起 portal，然后走一遍：
+导入 fixture → 看节点可达 → 切出口 → 测延迟 → 校验 304 → 跑一轮 agent 同步 → 回报节点状态。
+
+```bash
+cargo build                    # 改了前端要先: cd web && node .yarn/releases/yarn-4.18.0.cjs build
+bash scripts/local-demo.sh     # 跑完自动退出
+STAY=1 bash scripts/local-demo.sh   # 跑完保留服务，浏览器打开 http://127.0.0.1:3915
+```
+
+手动分别起（两个终端）：
+
+```bash
+node scripts/mock-clash.mjs                      # 假的 :9090 Clash API
+./target/debug/sing-portal serve \               # 控制面
+  --listen 127.0.0.1:3015 \
+  --db /tmp/sing-portal/portal.db \
+  --nodes "home=127.0.0.1:9090" \
+  --sing-box scripts/fake-sing-box.sh
+```
+
+浏览器打开 http://127.0.0.1:3015，在「订阅」页粘贴 `fixtures/sub-singbox.json` 的内容，
+然后在「节点」页切换出口、点「测延迟」。
+
+单独跑一轮 agent（写文件 + 恢复选择，不重启任何东西）：
+
+```bash
+./target/debug/sing-portal agent --once \
+  --portal http://127.0.0.1:3015 \
+  --name home \
+  --template examples/template.json \
+  --config /tmp/sing-box/config.json \
+  --state-dir /tmp/sing-box/state \
+  --sing-box scripts/fake-sing-box.sh \
+  --clash http://127.0.0.1:9090 \
+  --restart-cmd ""
+```
+
+搞坏配置看回滚：`FAKE_SING_BOX_FAIL=1` 前缀跑上面这条，`outbounds.json` 不会被覆盖，
+agent 上报 `health: rollback`。
+
+如果 `TMPDIR` 指向一个不存在的目录（`nix develop` 进过 nix-shell 时偶尔会），
+portal 的校验临时文件和 agent 写文件都会失败：`export TMPDIR=/tmp` 即可。
 
 ## 运行控制面
 

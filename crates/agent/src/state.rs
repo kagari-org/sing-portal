@@ -9,6 +9,8 @@ use crate::error::Result;
 pub struct LocalState {
     pub applied_revision: String,
     pub applied_selection: String,
+    #[serde(default)]
+    pub applied_latency_url: String,
     pub last_error: String,
     pub updated_at: i64,
 }

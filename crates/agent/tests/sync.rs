@@ -141,7 +141,13 @@ async fn syncs_state_over_websocket() {
     else {
         panic!("expected sync result, got {reply:?}");
     };
-    assert_eq!(revision, "sha256:new");
+    if !error.is_empty() {
+        eprintln!(
+            "sing-box log:\n{}",
+            std::fs::read_to_string(dir.path().join("sing-box.log")).unwrap_or_default()
+        );
+    }
+    assert_eq!(revision, "sha256:new", "health={health} applied={applied} error={error}");
     assert_eq!(selection, "node-a");
     assert_eq!(health, "ok");
     assert!(applied);

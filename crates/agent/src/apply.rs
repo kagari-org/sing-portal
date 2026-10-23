@@ -20,14 +20,18 @@ pub async fn apply(config: &AgentConfig, outbounds: &[Value], api: &BoxApi) -> R
     state::write_atomic(&config.config_path, &bytes).await?;
 
     if let Err(error) = restart(config).await {
-        rollback(config, api).await?;
+        if let Err(rollback_error) = rollback(config, api).await {
+            tracing::warn!(%rollback_error, "rollback failed");
+        }
         return Err(error);
     }
 
     match wait_healthy(config, api).await {
         Ok(()) => Ok(()),
         Err(error) => {
-            rollback(config, api).await?;
+            if let Err(rollback_error) = rollback(config, api).await {
+                tracing::warn!(%rollback_error, "rollback failed");
+            }
             Err(error)
         }
     }
@@ -56,7 +60,12 @@ async fn restart(config: &AgentConfig) -> Result<()> {
 async fn wait_healthy(config: &AgentConfig, api: &BoxApi) -> Result<()> {
     let deadline = Instant::now() + config.health_timeout;
     loop {
-        if api.version().await.is_ok() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(AgentError::Unhealthy);
+        }
+        let attempt = remaining.min(Duration::from_secs(1));
+        if api.version_within(attempt).await.is_ok() {
             return Ok(());
         }
         if Instant::now() >= deadline {

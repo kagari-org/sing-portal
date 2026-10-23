@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sing_portal_core::render::SELECTOR_TAG;
+use tokio::sync::RwLock;
 use tonic::Status;
 use tonic::transport::{Channel, Endpoint};
 
@@ -25,22 +27,38 @@ pub struct OutboundState {
 
 #[derive(Clone)]
 pub struct BoxApi {
-    channel: Channel,
+    url: String,
+    channel: Arc<RwLock<Channel>>,
     timeout: Duration,
 }
 
 impl BoxApi {
     pub fn new(url: &str, timeout: Duration) -> Result<Self> {
-        let endpoint = Endpoint::from_shared(url.to_string())
-            .map_err(|error| AgentError::BoxApi(format!("invalid api url: {error}")))?;
+        let channel = Self::connect(url)?;
         Ok(Self {
-            channel: endpoint.connect_lazy(),
+            url: url.to_string(),
+            channel: Arc::new(RwLock::new(channel)),
             timeout,
         })
     }
 
-    fn client(&self) -> StartedServiceClient<Channel> {
-        StartedServiceClient::new(self.channel.clone())
+    fn connect(url: &str) -> Result<Channel> {
+        let endpoint = Endpoint::from_shared(url.to_string())
+            .map_err(|error| AgentError::BoxApi(format!("invalid api url: {error}")))?;
+        Ok(endpoint.connect_lazy())
+    }
+
+    async fn client(&self) -> StartedServiceClient<Channel> {
+        StartedServiceClient::new(self.channel.read().await.clone())
+    }
+
+    /// sing-box restarts drop every connection; a lazy channel that lost its
+    /// transport keeps failing until tonic reconnects with backoff, so replace
+    /// it after transport errors instead of waiting for that.
+    async fn reconnect(&self) {
+        if let Ok(channel) = Self::connect(&self.url) {
+            *self.channel.write().await = channel;
+        }
     }
 
     async fn wait<T>(
@@ -48,20 +66,37 @@ impl BoxApi {
         timeout: Duration,
         request: impl Future<Output = std::result::Result<T, Status>>,
     ) -> Result<T> {
-        tokio::time::timeout(timeout, request)
-            .await
-            .map_err(|_| AgentError::BoxApi("sing-box api request timed out".into()))?
-            .map_err(|status| AgentError::BoxApi(status.message().to_string()))
+        match tokio::time::timeout(timeout, request).await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(status)) => {
+                // a restarted sing-box can answer on a stale h2 connection with
+                // a body-less error; any channel state is suspect after an error
+                self.reconnect().await;
+                Err(AgentError::BoxApi(status.message().to_string()))
+            }
+            Err(_) => {
+                self.reconnect().await;
+                Err(AgentError::BoxApi(
+                    "sing-box api request timed out".into(),
+                ))
+            }
+        }
     }
 
     pub async fn version(&self) -> Result<String> {
-        let mut client = self.client();
-        let reply = self.wait(self.timeout, client.get_version(())).await?;
+        self.version_within(self.timeout).await
+    }
+
+    /// Version probe with a custom timeout, so a reconnecting channel cannot
+    /// eat the whole health check deadline in a single call.
+    pub async fn version_within(&self, timeout: Duration) -> Result<String> {
+        let mut client = self.client().await;
+        let reply = self.wait(timeout, client.get_version(())).await?;
         Ok(reply.into_inner().version)
     }
 
     pub async fn current_selection(&self) -> Result<String> {
-        let mut client = self.client();
+        let mut client = self.client().await;
         let mut stream = self
             .wait(self.timeout, client.subscribe_groups(()))
             .await?
@@ -87,7 +122,7 @@ impl BoxApi {
     }
 
     pub async fn select(&self, group: &str, outbound: &str) -> Result<()> {
-        let mut client = self.client();
+        let mut client = self.client().await;
         let request = SelectOutboundRequest {
             group_tag: group.to_string(),
             outbound_tag: outbound.to_string(),
@@ -98,7 +133,7 @@ impl BoxApi {
     }
 
     pub async fn url_test(&self, outbound: &str) -> Result<()> {
-        let mut client = self.client();
+        let mut client = self.client().await;
         let request = UrlTestRequest {
             outbound_tag: outbound.to_string(),
         };
@@ -107,7 +142,7 @@ impl BoxApi {
     }
 
     pub async fn outbounds(&self) -> Result<HashMap<String, OutboundState>> {
-        let mut client = self.client();
+        let mut client = self.client().await;
         let mut stream = self
             .wait(self.timeout, client.subscribe_outbounds(()))
             .await?
@@ -139,7 +174,7 @@ impl BoxApi {
         runtime: u64,
         config_url: Option<&str>,
     ) -> Result<NetworkQualityTestProgress> {
-        let mut client = self.client();
+        let mut client = self.client().await;
         let request = NetworkQualityTestRequest {
             config_url: config_url.unwrap_or_default().to_string(),
             outbound_tag: tag.to_string(),

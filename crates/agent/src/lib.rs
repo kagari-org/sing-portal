@@ -205,12 +205,15 @@ impl Agent {
         let config_missing = !tokio::fs::try_exists(&self.config.config_path)
             .await
             .unwrap_or(false);
+        // the rendered config embeds the latency url; re-render when it changes
+        let latency_url_changed = local.applied_latency_url != self.config.latency_url;
         if empty {
             health = "no_active_subscriptions".to_string();
-        } else if revision != local.applied_revision || config_missing {
+        } else if revision != local.applied_revision || config_missing || latency_url_changed {
             match apply::apply(&self.config, &outbounds, &self.api).await {
                 Ok(()) => {
                     local.applied_revision = revision.clone();
+                    local.applied_latency_url = self.config.latency_url.clone();
                     applied = true;
                 }
                 Err(apply_error) => {

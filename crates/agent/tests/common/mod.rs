@@ -61,6 +61,7 @@ pub async fn start(root: &Path, api_port: u16, config: &Value) -> (Child, PathBu
     )
     .unwrap();
 
+    let log = std::fs::File::create(root.join("sing-box.log")).unwrap();
     let child = Command::new(sing_box().expect("SING_BOX_BIN"))
         .arg("run")
         .arg("-D")
@@ -68,12 +69,26 @@ pub async fn start(root: &Path, api_port: u16, config: &Value) -> (Child, PathBu
         .arg("-C")
         .arg(&config_dir)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(log))
         .kill_on_drop(true)
         .spawn()
         .unwrap();
 
     wait_port(api_port).await;
+
+    // make sure the api service really answers before the test can reload
+    let api = sing_portal_agent::api::BoxApi::new(
+        &format!("http://127.0.0.1:{api_port}"),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    for _ in 0..100 {
+        if api.version().await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
     (child, config_dir, state_dir)
 }
 

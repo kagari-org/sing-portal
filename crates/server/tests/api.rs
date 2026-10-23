@@ -176,6 +176,30 @@ async fn selection_validation_and_queueing() {
     let response = router(app.state.clone())
         .oneshot(
             request("PUT", "/api/nodes/home/selection")
+                .body(Body::from(json!({ "outbound": "provider-a · US 01" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::CONFLICT,
+        "auto machines must be switched to manual before picking an egress"
+    );
+
+    let response = router(app.state.clone())
+        .oneshot(
+            request("PUT", "/api/nodes/home/mode")
+                .body(Body::from(json!({ "mode": "manual" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = router(app.state.clone())
+        .oneshot(
+            request("PUT", "/api/nodes/home/selection")
                 .body(Body::from(json!({ "outbound": "nope" }).to_string()))
                 .unwrap(),
         )

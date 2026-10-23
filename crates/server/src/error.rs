@@ -9,6 +9,7 @@ pub enum ApiError {
     Forbidden(String),
     NotFound(String),
     Unprocessable(String),
+    Conflict(String),
     Upstream(String),
     Internal(String),
 }
@@ -20,6 +21,7 @@ impl ApiError {
             ApiError::Forbidden(_) => StatusCode::FORBIDDEN,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            ApiError::Conflict(_) => StatusCode::CONFLICT,
             ApiError::Upstream(_) => StatusCode::BAD_GATEWAY,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -31,6 +33,7 @@ impl ApiError {
             | ApiError::Forbidden(message)
             | ApiError::NotFound(message)
             | ApiError::Unprocessable(message)
+            | ApiError::Conflict(message)
             | ApiError::Upstream(message)
             | ApiError::Internal(message) => message,
         }

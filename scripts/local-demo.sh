@@ -93,7 +93,10 @@ curl -fsS "$portal/api/nodes" |
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const n=JSON.parse(s)[0];console.log({mode:n.mode,selection:n.selection,score:n.score===null?null:Number(n.score.toFixed(1)),best:n.best})})'
 
 echo
-echo "== switch egress to a concrete node (this pins the machine to manual)"
+echo "== pin the machine to manual, then switch egress"
+curl -fsS -X PUT -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
+  --data '{"mode":"manual"}' "$portal/api/nodes/home/mode"
+echo
 curl -fsS -X PUT -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
   --data '{"outbound":"provider-a · HY2"}' "$portal/api/nodes/home/selection"
 echo

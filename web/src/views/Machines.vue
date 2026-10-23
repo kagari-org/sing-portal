@@ -60,7 +60,9 @@ const columns = computed<DataTableColumns<Machine>>(() => [
     render: (row) =>
       h(NSwitch, {
         value: row.mode === 'auto',
-        onUpdateValue: (value: boolean) => setMode(row, value),
+        onUpdateValue: (value: boolean) => {
+          if (value !== (row.mode === 'auto')) setMode(row, value)
+        },
       }),
   },
   {
@@ -73,6 +75,7 @@ const columns = computed<DataTableColumns<Machine>>(() => [
         options: selectionOptions.value,
         size: 'small',
         filterable: true,
+        disabled: row.mode === 'auto',
         onUpdateValue: (value: string) => choose(row, value),
       }),
   },
@@ -157,6 +160,7 @@ function healthType(health: string): 'success' | 'warning' | 'error' | 'default'
 }
 
 async function setMode(machine: Machine, auto: boolean) {
+  if (auto === (machine.mode === 'auto')) return
   try {
     await api.setMode(machine.name, auto ? 'auto' : 'manual')
     message.success(`${machine.name}: ${auto ? 'auto' : 'manual'} selection`)
@@ -180,6 +184,8 @@ async function evaluate(machine: Machine) {
 }
 
 async function choose(machine: Machine, value: string) {
+  const current = store.machines.find((entry) => entry.name === machine.name)
+  if (!value || !current || current.mode === 'auto' || value === current.selection) return
   try {
     const result = await api.setSelection(machine.name, value)
     await store.loadMachines()

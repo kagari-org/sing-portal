@@ -90,6 +90,17 @@ pub async fn set_selection(
         return Err(ApiError::NotFound(format!("unknown machine {name}")));
     }
 
+    if state
+        .store()
+        .selection_with_mode(&name)
+        .await?
+        .is_some_and(|selection| selection.mode == SelectionMode::Auto)
+    {
+        return Err(ApiError::Conflict(
+            "selection is managed automatically; switch the machine to manual first".into(),
+        ));
+    }
+
     let tags = service::active_tags(&state).await?;
     if !service::is_valid_choice(&request.outbound, &tags) {
         return Err(ApiError::Unprocessable(format!(
@@ -101,10 +112,6 @@ pub async fn set_selection(
     state
         .store()
         .set_selection(&name, &request.outbound)
-        .await?;
-    state
-        .store()
-        .set_selection_mode(&name, SelectionMode::Manual)
         .await?;
 
     let applied = service::select(&state, &name, &request.outbound).await?;

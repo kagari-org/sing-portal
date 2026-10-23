@@ -81,20 +81,17 @@ struct AgentArgs {
     #[arg(long = "name", env = "SING_PORTAL_NODE")]
     node: String,
 
-    #[arg(long, env = "SING_PORTAL_TEMPLATE")]
-    template: PathBuf,
-
     #[arg(
         long,
         env = "SING_PORTAL_CONFIG",
-        default_value = "/run/sing-box/config.json"
+        default_value = "/run/sing-box/outbounds.json"
     )]
     config: PathBuf,
 
     #[arg(
         long,
         env = "SING_PORTAL_STATE_DIR",
-        default_value = "/var/lib/sing-box"
+        default_value = "/var/lib/sing-portal-agent"
     )]
     state_dir: PathBuf,
 
@@ -196,7 +193,6 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
     let config = AgentConfig {
         portal_url: args.portal,
         node_name: args.node,
-        template_path: args.template,
         config_path: args.config,
         state_dir: args.state_dir.clone(),
         sing_box_bin: args.sing_box.clone(),

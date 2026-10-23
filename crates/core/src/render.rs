@@ -1,22 +1,12 @@
 use serde_json::{Value, json};
 
-use crate::error::Error;
 use crate::model::{DEFAULT_TEST_URL, is_proxy_outbound, outbound_tag};
 
 pub const SELECTOR_TAG: &str = "s_out";
 pub const AUTO_TAG: &str = "s_auto";
 pub const DIRECT_TAG: &str = "s_direct";
 
-pub fn render(template: &Value, outbounds: &[Value]) -> Result<Value, Error> {
-    let mut config = template
-        .as_object()
-        .cloned()
-        .ok_or(Error::TemplateNotObject)?;
-
-    if config.contains_key("outbounds") {
-        return Err(Error::TemplateHasOutbounds);
-    }
-
+pub fn outbounds(outbounds: &[Value]) -> Vec<Value> {
     let nodes: Vec<Value> = outbounds
         .iter()
         .filter(|outbound| is_proxy_outbound(outbound))
@@ -57,9 +47,11 @@ pub fn render(template: &Value, outbounds: &[Value]) -> Result<Value, Error> {
     }
     rendered.push(json!({ "type": "direct", "tag": DIRECT_TAG }));
     rendered.extend(nodes);
+    rendered
+}
 
-    config.insert("outbounds".to_string(), Value::Array(rendered));
-    Ok(Value::Object(config))
+pub fn config(nodes: &[Value]) -> Value {
+    json!({ "outbounds": outbounds(nodes) })
 }
 
 pub fn to_bytes(config: &Value) -> Vec<u8> {

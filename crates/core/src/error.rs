@@ -18,8 +18,4 @@ pub enum Error {
     Uri(String),
     #[error("unsupported URI scheme: {0}")]
     UnsupportedScheme(String),
-    #[error("template must be a JSON object")]
-    TemplateNotObject,
-    #[error("template must not contain an outbounds key; the renderer owns it")]
-    TemplateHasOutbounds,
 }

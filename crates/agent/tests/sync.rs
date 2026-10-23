@@ -9,14 +9,6 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{WebSocketStream, accept_async};
 
-const TEMPLATE: &str = r#"{
-  "log": { "level": "warn" },
-  "inbounds": [
-    { "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 7897 }
-  ],
-  "route": { "final": "s_out" }
-}"#;
-
 fn outbounds() -> Value {
     json!([
         { "type": "vless", "tag": "provider · US 01", "server": "1.2.3.4", "server_port": 443, "uuid": "u" },
@@ -31,13 +23,9 @@ struct Fixture {
 
 async fn fixture(portal: String) -> Fixture {
     let dir = TempDir::new().unwrap();
-    let template_path = dir.path().join("template.json");
-    std::fs::write(&template_path, TEMPLATE).unwrap();
-
     let config = AgentConfig {
         portal_url: portal,
         node_name: "home".into(),
-        template_path,
         config_path: dir.path().join("run/config.json"),
         state_dir: dir.path().join("state"),
         sing_box_bin: fake_sing_box(&dir),

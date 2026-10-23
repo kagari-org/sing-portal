@@ -8,8 +8,10 @@ pub enum AgentError {
     Portal(String),
     #[error("sing-box api: {0}")]
     BoxApi(String),
-    #[error("sing-box check failed: {0}")]
-    Check(String),
+    #[error("restart failed: {0}")]
+    Restart(String),
+    #[error("rollback failed: {0}")]
+    Rollback(String),
     #[error("sing-box did not become healthy within timeout")]
     Unhealthy,
     #[error("template: {0}")]

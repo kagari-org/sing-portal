@@ -10,13 +10,12 @@ use sing_portal_store::{NodeReport, Source, Subscription};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
-use crate::{fetch, validate};
+use crate::fetch;
 
 pub struct Prepared {
     pub format: Format,
     pub content: String,
     pub outbounds: Vec<Value>,
-    pub validated: bool,
     pub warnings: Vec<String>,
 }
 
@@ -39,13 +38,10 @@ pub async fn prepare(
 
     let parsed = parse_subscription(&bytes).map_err(ApiError::from_core)?;
     let outbounds = normalize(parsed.outbounds, slug).map_err(ApiError::from_core)?;
-    let validated = validate::check(state, &outbounds).await?;
-
     Ok(Prepared {
         format: parsed.format,
         content: String::from_utf8_lossy(&bytes).into_owned(),
         outbounds,
-        validated,
         warnings: parsed.warnings,
     })
 }
@@ -129,7 +125,6 @@ pub async fn refresh_subscription(
                     &prepared.outbounds,
                     sing_portal_store::now(),
                     next,
-                    prepared.validated,
                 )
                 .await?;
             Ok((updated, prepared.warnings))

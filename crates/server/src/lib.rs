@@ -7,7 +7,6 @@ pub mod registry;
 pub mod scheduler;
 pub mod service;
 pub mod state;
-pub mod validate;
 
 pub use config::{ServerConfig, mask_url, parse_duration};
 pub use state::AppState;

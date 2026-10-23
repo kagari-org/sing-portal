@@ -9,7 +9,9 @@ futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 url.workspace = true
+prost.workspace = true
 sing-portal-core.workspace = true
+tonic.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
@@ -18,3 +20,6 @@ tokio-tungstenite.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true

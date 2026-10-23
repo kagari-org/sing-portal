@@ -42,7 +42,6 @@ pub struct Subscription {
     pub next_refresh_at: Option<i64>,
     pub last_fetched_at: Option<i64>,
     pub last_error: String,
-    pub validated: bool,
     pub failures: i64,
     pub created_at: i64,
     pub updated_at: i64,
@@ -73,7 +72,6 @@ pub struct NewSubscription {
     pub auto_refresh: bool,
     pub refresh_interval_secs: i64,
     pub next_refresh_at: Option<i64>,
-    pub validated: bool,
     pub failures: i64,
     pub now: i64,
 }

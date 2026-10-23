@@ -32,9 +32,6 @@ struct ServeArgs {
     #[arg(long, env = "SING_PORTAL_DB", default_value = "portal.db")]
     db: PathBuf,
 
-    #[arg(long, env = "SING_PORTAL_SING_BOX")]
-    sing_box: Option<PathBuf>,
-
     #[arg(long, env = "SING_PORTAL_FETCH_PROXY")]
     fetch_proxy: Option<String>,
 
@@ -98,8 +95,12 @@ struct AgentArgs {
     )]
     state_dir: PathBuf,
 
-    #[arg(long, env = "SING_PORTAL_SING_BOX", default_value = "sing-box")]
-    sing_box: String,
+    #[arg(
+        long,
+        env = "SING_PORTAL_LATENCY_URL",
+        default_value = sing_portal_core::model::DEFAULT_TEST_URL
+    )]
+    latency_url: String,
 
     #[arg(
         long,
@@ -162,7 +163,6 @@ async fn serve(args: ServeArgs) -> Result<()> {
     let config = ServerConfig {
         listen: args.listen,
         db_path: args.db,
-        sing_box: args.sing_box,
         fetch_proxy: args.fetch_proxy,
         refresh_default: parse_duration(&args.refresh_default).map_err(anyhow::Error::msg)?,
         fetch_timeout: parse_duration(&args.fetch_timeout).map_err(anyhow::Error::msg)?,
@@ -199,8 +199,8 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         template_path: args.template,
         config_path: args.config,
         state_dir: args.state_dir.clone(),
-        sing_box_bin: args.sing_box.clone(),
         api_url: args.api_url,
+        latency_url: args.latency_url,
         restart_cmd: if args.restart_cmd.is_empty() {
             None
         } else {

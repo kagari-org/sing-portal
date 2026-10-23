@@ -24,7 +24,6 @@ fn new_subscription(id: &str, slug: &str, tag: &str) -> NewSubscription {
         auto_refresh: true,
         refresh_interval_secs: 3600,
         next_refresh_at: Some(100),
-        validated: true,
         failures: 0,
         now: 10,
     }
@@ -82,7 +81,6 @@ async fn subscriptions_roundtrip() {
             &[serde_json::json!({"type": "vmess", "tag": "b"})],
             500,
             Some(900),
-            true,
         )
         .await
         .unwrap();

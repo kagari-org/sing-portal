@@ -28,8 +28,8 @@ impl Store {
                 "INSERT INTO subscriptions (
                     id, name, slug, source, url, user_agent, format, content, outbounds, enabled,
                     auto_refresh, refresh_interval_secs, next_refresh_at, last_fetched_at,
-                    last_error, validated, failures, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    last_error, failures, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&subscription.id)
             .bind(&subscription.name)
@@ -46,7 +46,6 @@ impl Store {
             .bind(subscription.next_refresh_at)
             .bind(subscription.last_fetched_at)
             .bind(&subscription.last_error)
-            .bind(i64::from(subscription.validated))
             .bind(subscription.failures)
             .bind(subscription.created_at)
             .bind(subscription.updated_at)

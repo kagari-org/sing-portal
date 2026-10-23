@@ -80,7 +80,6 @@ pub async fn create(
         auto_refresh: request.auto_refresh.unwrap_or(true),
         refresh_interval_secs: interval.as_secs() as i64,
         next_refresh_at: Some(now + interval.as_secs() as i64),
-        validated: prepared.validated,
         failures: 0,
         now,
     };

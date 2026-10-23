@@ -1,13 +1,13 @@
 use serde_json::{Value, json};
 
 use crate::error::Error;
-use crate::model::{DEFAULT_TEST_URL, is_proxy_outbound, outbound_tag};
+use crate::model::{is_proxy_outbound, outbound_tag};
 
 pub const SELECTOR_TAG: &str = "s_out";
 pub const AUTO_TAG: &str = "s_auto";
 pub const DIRECT_TAG: &str = "s_direct";
 
-pub fn render(template: &Value, outbounds: &[Value]) -> Result<Value, Error> {
+pub fn render(template: &Value, outbounds: &[Value], test_url: &str) -> Result<Value, Error> {
     let mut config = template
         .as_object()
         .cloned()
@@ -50,7 +50,7 @@ pub fn render(template: &Value, outbounds: &[Value]) -> Result<Value, Error> {
             "type": "urltest",
             "tag": AUTO_TAG,
             "outbounds": tags,
-            "url": DEFAULT_TEST_URL,
+            "url": test_url,
             "interval": "5m",
             "tolerance": 50,
         }));

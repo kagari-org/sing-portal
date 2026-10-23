@@ -1,0 +1,78 @@
+// Mirrors sing-box daemon/started_service.proto (GPL-3.0, SagerNet/sing-box),
+// trimmed to the RPCs and messages sing-portal uses.
+syntax = "proto3";
+
+package daemon;
+
+import "google/protobuf/empty.proto";
+
+service StartedService {
+  rpc GetVersion(google.protobuf.Empty) returns (Version) {}
+  rpc SubscribeGroups(google.protobuf.Empty) returns (stream Groups) {}
+  rpc SelectOutbound(SelectOutboundRequest) returns (google.protobuf.Empty) {}
+  rpc URLTest(URLTestRequest) returns (google.protobuf.Empty) {}
+  rpc SubscribeOutbounds(google.protobuf.Empty) returns (stream OutboundList) {}
+  rpc StartNetworkQualityTest(NetworkQualityTestRequest) returns (stream NetworkQualityTestProgress) {}
+}
+
+message Version {
+  string version = 1;
+  int32 apiVersion = 2;
+}
+
+message Groups {
+  repeated Group group = 1;
+}
+
+message Group {
+  string tag = 1;
+  string type = 2;
+  bool selectable = 3;
+  string selected = 4;
+  bool isExpand = 5;
+  repeated GroupItem items = 6;
+}
+
+message GroupItem {
+  string tag = 1;
+  string type = 2;
+  int64 urlTestTime = 3;
+  int32 urlTestDelay = 4;
+}
+
+message SelectOutboundRequest {
+  string groupTag = 1;
+  string outboundTag = 2;
+}
+
+message URLTestRequest {
+  string outboundTag = 1;
+}
+
+message OutboundList {
+  repeated GroupItem outbounds = 1;
+}
+
+message NetworkQualityTestRequest {
+  string configURL = 1;
+  string outboundTag = 2;
+  bool serial = 3;
+  int32 maxRuntimeSeconds = 4;
+  bool http3 = 5;
+}
+
+message NetworkQualityTestProgress {
+  int32 phase = 1;
+  int64 downloadCapacity = 2;
+  int64 uploadCapacity = 3;
+  int32 downloadRPM = 4;
+  int32 uploadRPM = 5;
+  int32 idleLatencyMs = 6;
+  int64 elapsedMs = 7;
+  bool isFinal = 8;
+  string error = 9;
+  int32 downloadCapacityAccuracy = 10;
+  int32 uploadCapacityAccuracy = 11;
+  int32 downloadRPMAccuracy = 12;
+  int32 uploadRPMAccuracy = 13;
+}

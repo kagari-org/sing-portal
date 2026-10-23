@@ -89,7 +89,7 @@ pub fn now() -> i64 {
         .unwrap_or_default()
 }
 
-pub(crate) const SUBSCRIPTION_COLUMNS: &str = "id, name, slug, source, url, user_agent, format, content, outbounds, enabled, auto_refresh, refresh_interval_secs, next_refresh_at, last_fetched_at, last_error, validated, failures, created_at, updated_at";
+pub(crate) const SUBSCRIPTION_COLUMNS: &str = "id, name, slug, source, url, user_agent, format, content, outbounds, enabled, auto_refresh, refresh_interval_secs, next_refresh_at, last_fetched_at, last_error, failures, created_at, updated_at";
 
 pub(crate) fn subscription_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Subscription> {
     let outbounds: String = row.try_get("outbounds")?;
@@ -115,7 +115,6 @@ pub(crate) fn subscription_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Sub
         next_refresh_at: row.try_get("next_refresh_at")?,
         last_fetched_at: row.try_get("last_fetched_at")?,
         last_error: row.try_get("last_error")?,
-        validated: row.try_get::<i64, _>("validated")? != 0,
         failures: row.try_get("failures")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,

@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use sing_portal_core::canonical::{normalize, revision, selection_revision, slugify, unique_slug};
 use sing_portal_core::detect::{Format, detect, parse_subscription};
-use sing_portal_core::model::{TAG_SEPARATOR, outbound_tag};
+use sing_portal_core::model::{DEFAULT_TEST_URL, TAG_SEPARATOR, outbound_tag};
 use sing_portal_core::render::{AUTO_TAG, DIRECT_TAG, SELECTOR_TAG, render};
 use sing_portal_core::uri;
 
@@ -259,7 +259,7 @@ fn render_injects_outbounds() {
         json!({"type":"vless","tag":"n2","server":"h","server_port":443,"uuid":"u"}),
     ];
 
-    let rendered = render(&template, &outbounds).unwrap();
+    let rendered = render(&template, &outbounds, DEFAULT_TEST_URL).unwrap();
     let rendered_outbounds = rendered["outbounds"].as_array().unwrap();
     assert_eq!(rendered_outbounds.len(), 5);
     assert_eq!(rendered_outbounds[0]["type"], "selector");
@@ -277,7 +277,7 @@ fn render_injects_outbounds() {
 
 #[test]
 fn render_without_nodes_falls_back_to_direct() {
-    let rendered = render(&json!({"log": {}}), &[]).unwrap();
+    let rendered = render(&json!({"log": {}}), &[], DEFAULT_TEST_URL).unwrap();
     let outbounds = rendered["outbounds"].as_array().unwrap();
     assert_eq!(outbounds.len(), 2);
     assert_eq!(outbounds[0]["default"], DIRECT_TAG);
@@ -287,6 +287,6 @@ fn render_without_nodes_falls_back_to_direct() {
 
 #[test]
 fn render_rejects_template_with_outbounds() {
-    let error = render(&json!({"outbounds": []}), &[]).unwrap_err();
+    let error = render(&json!({"outbounds": []}), &[], DEFAULT_TEST_URL).unwrap_err();
     assert!(error.to_string().contains("outbounds"));
 }

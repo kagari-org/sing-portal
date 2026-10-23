@@ -14,7 +14,6 @@ export interface Subscription {
   nextRefreshAt: number | null
   lastFetchedAt: number | null
   lastError: string
-  validated: boolean
   failures: number
   createdAt: number
   updatedAt: number

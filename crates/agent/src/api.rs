@@ -1,77 +1,136 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::future::Future;
+use std::time::{Duration, Instant};
 
 use sing_portal_core::render::SELECTOR_TAG;
+use tonic::Status;
+use tonic::transport::{Channel, Endpoint};
 
 use crate::error::{AgentError, Result};
 
+pub mod daemon {
+    tonic::include_proto!("daemon");
+}
+
+use daemon::started_service_client::StartedServiceClient;
+use daemon::{
+    NetworkQualityTestRequest, NetworkQualityTestProgress, SelectOutboundRequest, UrlTestRequest,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutboundState {
+    pub url_test_time: i64,
+    pub delay_ms: Option<u32>,
+}
+
 #[derive(Clone)]
 pub struct BoxApi {
-    binary: PathBuf,
-    url: String,
+    channel: Channel,
     timeout: Duration,
 }
 
 impl BoxApi {
-    pub fn new(binary: impl Into<PathBuf>, url: impl Into<String>, timeout: Duration) -> Self {
-        Self {
-            binary: binary.into(),
-            url: url.into(),
+    pub fn new(url: &str, timeout: Duration) -> Result<Self> {
+        let endpoint = Endpoint::from_shared(url.to_string())
+            .map_err(|error| AgentError::BoxApi(format!("invalid api url: {error}")))?;
+        Ok(Self {
+            channel: endpoint.connect_lazy(),
             timeout,
-        }
-    }
-
-    pub fn url(&self) -> &str {
-        &self.url
-    }
-
-    async fn run(&self, args: &[&str]) -> Result<String> {
-        let output = tokio::time::timeout(
-            self.timeout,
-            tokio::process::Command::new(&self.binary)
-                .arg("api")
-                .args(args)
-                .args(["--url", &self.url])
-                .output(),
-        )
-        .await
-        .map_err(|_| AgentError::BoxApi(format!("sing-box api {} timed out", args.join(" "))))?
-        .map_err(|error| AgentError::BoxApi(format!("cannot run sing-box api: {error}")))?;
-
-        if !output.status.success() {
-            return Err(AgentError::BoxApi(format!(
-                "sing-box api {} failed: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    }
-
-    pub async fn version(&self) -> Result<String> {
-        Ok(self.run(&["version"]).await?.trim().to_string())
-    }
-
-    pub async fn current_selection(&self) -> Result<String> {
-        let text = self.run(&["group", "show", SELECTOR_TAG]).await?;
-        select_field(&text, "Selected:").ok_or_else(|| {
-            AgentError::BoxApi(format!("group {SELECTOR_TAG} reports no selected outbound"))
         })
     }
 
-    pub async fn select(&self, group: &str, outbound: &str) -> Result<()> {
-        self.run(&["group", "select", group, outbound])
+    fn client(&self) -> StartedServiceClient<Channel> {
+        StartedServiceClient::new(self.channel.clone())
+    }
+
+    async fn wait<T>(
+        &self,
+        timeout: Duration,
+        request: impl Future<Output = std::result::Result<T, Status>>,
+    ) -> Result<T> {
+        tokio::time::timeout(timeout, request)
             .await
-            .map(|_| ())
+            .map_err(|_| AgentError::BoxApi("sing-box api request timed out".into()))?
+            .map_err(|status| AgentError::BoxApi(status.message().to_string()))
     }
 
-    pub async fn url_test(&self, group: &str) -> Result<()> {
-        self.run(&["group", "urltest", group]).await.map(|_| ())
+    pub async fn version(&self) -> Result<String> {
+        let mut client = self.client();
+        let reply = self.wait(self.timeout, client.get_version(())).await?;
+        Ok(reply.into_inner().version)
     }
 
-    pub async fn delays(&self) -> Result<HashMap<String, Option<u64>>> {
-        Ok(parse_delays(&self.run(&["outbounds"]).await?))
+    pub async fn current_selection(&self) -> Result<String> {
+        let mut client = self.client();
+        let mut stream = self
+            .wait(self.timeout, client.subscribe_groups(()))
+            .await?
+            .into_inner();
+        loop {
+            match self.wait(self.timeout, stream.message()).await? {
+                Some(snapshot) => {
+                    if let Some(group) = snapshot
+                        .group
+                        .iter()
+                        .find(|group| group.tag == SELECTOR_TAG)
+                    {
+                        return Ok(group.selected.clone());
+                    }
+                }
+                None => {
+                    return Err(AgentError::BoxApi(
+                        "sing-box closed the groups stream".into(),
+                    ));
+                }
+            }
+        }
+    }
+
+    pub async fn select(&self, group: &str, outbound: &str) -> Result<()> {
+        let mut client = self.client();
+        let request = SelectOutboundRequest {
+            group_tag: group.to_string(),
+            outbound_tag: outbound.to_string(),
+        };
+        self.wait(self.timeout, client.select_outbound(request))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn url_test(&self, outbound: &str) -> Result<()> {
+        let mut client = self.client();
+        let request = UrlTestRequest {
+            outbound_tag: outbound.to_string(),
+        };
+        self.wait(self.timeout, client.url_test(request)).await?;
+        Ok(())
+    }
+
+    pub async fn outbounds(&self) -> Result<HashMap<String, OutboundState>> {
+        let mut client = self.client();
+        let mut stream = self
+            .wait(self.timeout, client.subscribe_outbounds(()))
+            .await?
+            .into_inner();
+        let first = self
+            .wait(self.timeout, stream.message())
+            .await?
+            .ok_or_else(|| AgentError::BoxApi("sing-box closed the outbounds stream".into()))?;
+
+        Ok(first
+            .outbounds
+            .into_iter()
+            .filter(|item| !item.tag.is_empty())
+            .map(|item| {
+                (
+                    item.tag,
+                    OutboundState {
+                        url_test_time: item.url_test_time,
+                        delay_ms: (item.url_test_delay > 0).then_some(item.url_test_delay as u32),
+                    },
+                )
+            })
+            .collect())
     }
 
     pub async fn network_quality(
@@ -79,60 +138,40 @@ impl BoxApi {
         tag: &str,
         runtime: u64,
         config_url: Option<&str>,
-    ) -> Result<String> {
-        let runtime = runtime.to_string();
-        let mut args = vec!["networkquality", "-o", tag, "--max-runtime", &runtime];
-        if let Some(config_url) = config_url {
-            args.push("--config-url");
-            args.push(config_url);
-        }
-        self.run(&args).await
-    }
-}
+    ) -> Result<NetworkQualityTestProgress> {
+        let mut client = self.client();
+        let request = NetworkQualityTestRequest {
+            config_url: config_url.unwrap_or_default().to_string(),
+            outbound_tag: tag.to_string(),
+            serial: false,
+            max_runtime_seconds: runtime as i32,
+            http3: false,
+        };
+        let mut stream = self
+            .wait(self.timeout, client.start_network_quality_test(request))
+            .await?
+            .into_inner();
 
-fn select_field(text: &str, prefix: &str) -> Option<String> {
-    text.lines().find_map(|line| {
-        let value = line.strip_prefix(prefix)?.trim();
-        (!value.is_empty()).then(|| value.to_string())
-    })
-}
-
-fn parse_delays(text: &str) -> HashMap<String, Option<u64>> {
-    text.lines()
-        .filter_map(|line| {
-            let mut fields = line.split('\t');
-            let tag = fields.next()?.trim();
-            let _kind = fields.next()?;
-            if tag.is_empty() {
-                return None;
+        let deadline = Instant::now() + Duration::from_secs(runtime.max(1) + 30);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(AgentError::BoxApi(
+                    "network quality test did not finish in time".into(),
+                ));
             }
-            let delay = fields.next().unwrap_or("-").trim();
-            let millis = delay
-                .strip_suffix("ms")
-                .and_then(|value| value.trim().parse().ok());
-            Some((tag.to_string(), millis))
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{parse_delays, select_field};
-
-    #[test]
-    fn parses_group_show_selection() {
-        let text = "Tag:       s_out\nType:      selector\nSelected:  provider-a · JP 02\n";
-        assert_eq!(
-            select_field(text, "Selected:").as_deref(),
-            Some("provider-a · JP 02")
-        );
-    }
-
-    #[test]
-    fn parses_outbound_delays() {
-        let text = "s_out\tselector\t96 ms\ns_auto\turltest\t96 ms\nbad\tsocks\t-\n";
-        let delays = parse_delays(text);
-        assert_eq!(delays.get("s_out"), Some(&Some(96)));
-        assert_eq!(delays.get("bad"), Some(&None));
+            let progress = self
+                .wait(remaining, stream.message())
+                .await?
+                .ok_or_else(|| {
+                    AgentError::BoxApi("sing-box closed the quality stream".into())
+                })?;
+            if !progress.error.is_empty() {
+                return Err(AgentError::BoxApi(progress.error));
+            }
+            if progress.is_final {
+                return Ok(progress);
+            }
+        }
     }
 }

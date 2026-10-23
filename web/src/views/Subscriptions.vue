@@ -67,12 +67,10 @@ const columns: DataTableColumns<Subscription> = [
     title: 'Status',
     key: 'lastError',
     render: (row) => {
-      if (row.lastError) {
-        return h(NTag, { type: 'error', size: 'small' }, { default: () => row.lastError })
+      if (!row.lastError) {
+        return h(NTag, { type: 'success', size: 'small' }, { default: () => 'ok' })
       }
-      return row.validated
-        ? h(NTag, { type: 'success', size: 'small' }, { default: () => 'sing-box check passed' })
-        : h(NTag, { size: 'small' }, { default: () => 'not validated' })
+      return h(NTag, { type: 'error', size: 'small' }, { default: () => row.lastError })
     },
   },
   {

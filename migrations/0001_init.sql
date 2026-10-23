@@ -16,7 +16,6 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     next_refresh_at       INTEGER,
     last_fetched_at       INTEGER,
     last_error            TEXT NOT NULL DEFAULT '',
-    validated             INTEGER NOT NULL DEFAULT 0,
     failures              INTEGER NOT NULL DEFAULT 0,
     created_at            INTEGER NOT NULL,
     updated_at            INTEGER NOT NULL

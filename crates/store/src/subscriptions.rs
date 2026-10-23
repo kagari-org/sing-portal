@@ -51,8 +51,8 @@ impl Store {
             "INSERT INTO subscriptions (
                 id, name, slug, source, url, user_agent, format, content, outbounds, enabled,
                 auto_refresh, refresh_interval_secs, next_refresh_at, last_fetched_at, last_error,
-                validated, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)",
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
         )
         .bind(&new.id)
         .bind(&new.name)
@@ -68,7 +68,6 @@ impl Store {
         .bind(new.refresh_interval_secs)
         .bind(new.next_refresh_at)
         .bind(new.now)
-        .bind(i64::from(new.validated))
         .bind(new.now)
         .bind(new.now)
         .execute(self.pool())
@@ -124,18 +123,16 @@ impl Store {
         outbounds: &[serde_json::Value],
         fetched_at: i64,
         next_refresh_at: Option<i64>,
-        validated: bool,
     ) -> Result<Subscription> {
         sqlx::query(
             "UPDATE subscriptions SET format = ?, content = ?, outbounds = ?, last_fetched_at = ?,
-             next_refresh_at = ?, last_error = '', validated = ?, failures = 0, updated_at = ? WHERE id = ?",
+             next_refresh_at = ?, last_error = '', failures = 0, updated_at = ? WHERE id = ?",
         )
         .bind(format)
         .bind(content)
         .bind(bind_outbounds(outbounds)?)
         .bind(fetched_at)
         .bind(next_refresh_at)
-        .bind(i64::from(validated))
         .bind(now())
         .bind(id)
         .execute(self.pool())

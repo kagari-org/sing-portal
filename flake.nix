@@ -90,6 +90,7 @@
         src = source;
         cargoLock.lockFile = ./Cargo.lock;
         doCheck = false;
+        nativeBuildInputs = [ pkgs.protobuf ];
         postPatch = ''
           mkdir -p web/dist
           cp -a ${web}/. web/dist/
@@ -104,6 +105,7 @@
         packages = with pkgs; [
           rustc
           cargo
+          protobuf
           clippy
           rustfmt
           nodejs

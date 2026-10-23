@@ -25,7 +25,6 @@ async fn app() -> TestApp {
     let config = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         db_path: dir.path().join("portal.db"),
-        sing_box: None,
         fetch_proxy: None,
         refresh_default: Duration::from_secs(3600),
         fetch_timeout: Duration::from_secs(5),
@@ -109,7 +108,6 @@ async fn creates_subscription_from_pasted_content() {
     assert_eq!(subscription["format"], "sing-box-json");
     assert_eq!(subscription["outboundCount"], 2);
     assert_eq!(subscription["source"], "manual");
-    assert_eq!(subscription["validated"], false);
     assert_eq!(subscription["url"], Value::Null);
 }
 

@@ -8,7 +8,6 @@ use url::Url;
 pub struct ServerConfig {
     pub listen: SocketAddr,
     pub db_path: PathBuf,
-    pub sing_box: Option<PathBuf>,
     pub fetch_proxy: Option<String>,
     pub refresh_default: Duration,
     pub fetch_timeout: Duration,
@@ -26,7 +25,6 @@ impl Default for ServerConfig {
         Self {
             listen: SocketAddr::from(([127, 0, 0, 1], 3015)),
             db_path: PathBuf::from("portal.db"),
-            sing_box: None,
             fetch_proxy: None,
             refresh_default: Duration::from_secs(6 * 3600),
             fetch_timeout: Duration::from_secs(20),

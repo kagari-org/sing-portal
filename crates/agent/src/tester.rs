@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use sing_portal_core::render::AUTO_TAG;
 use tokio::sync::Mutex;
 
 use crate::api::BoxApi;
@@ -105,34 +104,6 @@ pub struct NetworkQuality {
     pub upload_rpm: Option<f64>,
 }
 
-pub fn parse_network_quality(output: &str) -> NetworkQuality {
-    let text = output.replace('\r', "\n");
-    NetworkQuality {
-        idle_latency_ms: last_number(&text, "Idle Latency:"),
-        download_mbps: last_number(&text, "Download Capacity:"),
-        upload_mbps: last_number(&text, "Upload Capacity:"),
-        download_rpm: last_number(&text, "Download Responsiveness:"),
-        upload_rpm: last_number(&text, "Upload Responsiveness:"),
-    }
-}
-
-fn last_number(text: &str, prefix: &str) -> Option<f64> {
-    let mut found = None;
-    for line in text.lines() {
-        let line = line.trim();
-        let Some(rest) = line.strip_prefix(prefix) else {
-            continue;
-        };
-        let Some(token) = rest.split_whitespace().next() else {
-            continue;
-        };
-        if let Ok(value) = token.parse::<f64>() {
-            found = Some(value);
-        }
-    }
-    found
-}
-
 pub struct Tester {
     config: TesterConfig,
     api: BoxApi,
@@ -166,30 +137,32 @@ impl Tester {
     }
 
     async fn latency(&self, tag: &str) -> Result<f64> {
-        let before = self.api.delays().await?;
-        if !before.contains_key(tag) {
+        let before = self.api.outbounds().await?;
+        let Some(previous) = before.get(tag) else {
             return Err(AgentError::Measure(format!(
-                "outbound `{tag}` is not part of the {AUTO_TAG} group"
+                "outbound `{tag}` is not known to sing-box"
             )));
-        }
+        };
 
-        self.api.url_test(AUTO_TAG).await?;
+        self.api.url_test(tag).await?;
         let deadline = Instant::now() + self.config.timeout.max(Duration::from_secs(3));
 
         loop {
-            let after = self.api.delays().await?;
-            if after.get(tag) != before.get(tag) {
-                return match after.get(tag) {
-                    Some(Some(millis)) => Ok(*millis as f64),
-                    _ => Err(AgentError::Measure(format!(
+            let after = self.api.outbounds().await?;
+            if let Some(current) = after.get(tag)
+                && current.url_test_time != previous.url_test_time
+            {
+                return match current.delay_ms {
+                    Some(millis) => Ok(millis as f64),
+                    None => Err(AgentError::Measure(format!(
                         "url test failed for outbound `{tag}`"
                     ))),
                 };
             }
             if Instant::now() >= deadline {
-                return match after.get(tag) {
-                    Some(Some(millis)) => Ok(*millis as f64),
-                    _ => Err(AgentError::Measure(format!(
+                return match after.get(tag).and_then(|state| state.delay_ms) {
+                    Some(millis) => Ok(millis as f64),
+                    None => Err(AgentError::Measure(format!(
                         "url test for outbound `{tag}` did not finish in time"
                     ))),
                 };
@@ -199,7 +172,7 @@ impl Tester {
     }
 
     async fn quality(&self, tag: &str) -> Result<NetworkQuality> {
-        let output = self
+        let progress = self
             .api
             .network_quality(
                 tag,
@@ -208,32 +181,21 @@ impl Tester {
             )
             .await?;
 
-        let report = parse_network_quality(&output);
+        let report = NetworkQuality {
+            idle_latency_ms: (progress.idle_latency_ms > 0).then(|| progress.idle_latency_ms as f64),
+            download_mbps: (progress.download_capacity > 0)
+                .then(|| progress.download_capacity as f64 / 1_000_000.0),
+            upload_mbps: (progress.upload_capacity > 0)
+                .then(|| progress.upload_capacity as f64 / 1_000_000.0),
+            download_rpm: (progress.download_rpm > 0).then(|| progress.download_rpm as f64),
+            upload_rpm: (progress.upload_rpm > 0).then(|| progress.upload_rpm as f64),
+        };
+
         if report.download_mbps.is_none() && report.upload_mbps.is_none() {
             return Err(AgentError::Measure(
                 "network quality test reported no capacity".into(),
             ));
         }
         Ok(report)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_network_quality;
-
-    #[test]
-    fn parses_network_quality_summary() {
-        let output = "==== NETWORK QUALITY TEST ====\rIdle Latency: 114 ms\r\n\
-                      Download Capacity: 12.5 Mbps Accuracy: Medium\r\n\
-                      Download Capacity: 88.0 Mbps Accuracy: High\r\n\
-                      Upload Capacity: 42.0 Mbps Accuracy: High\r\n\
-                      Download Responsiveness: 600 RPM Accuracy: Medium\r\n\
-                      Upload Responsiveness: 520 RPM Accuracy: Low\r\n";
-        let report = parse_network_quality(output);
-        assert_eq!(report.idle_latency_ms, Some(114.0));
-        assert_eq!(report.download_mbps, Some(88.0));
-        assert_eq!(report.upload_mbps, Some(42.0));
-        assert_eq!(report.download_rpm, Some(600.0));
     }
 }

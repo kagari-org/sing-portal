@@ -27,7 +27,7 @@ pub struct Agent {
 
 impl Agent {
     pub fn new(config: AgentConfig) -> Result<Self> {
-        let api = BoxApi::new(&config.sing_box_bin, config.api_url.clone(), Duration::from_secs(5));
+        let api = BoxApi::new(&config.api_url, Duration::from_secs(5))?;
         let tester = Tester::new(config.tester.clone(), api.clone());
         Ok(Self { config, api, tester })
     }
@@ -77,7 +77,7 @@ impl Agent {
         let Ok(template) = serde_json::from_slice::<serde_json::Value>(&template_bytes) else {
             return;
         };
-        let Ok(config) = render(&template, &[]) else {
+        let Ok(config) = render(&template, &[], &self.config.latency_url) else {
             return;
         };
         if let Err(error) = state::write_atomic(&self.config.config_path, &to_bytes(&config)).await {

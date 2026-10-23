@@ -2,7 +2,7 @@ use serde_json::Value;
 
 pub const TAG_SEPARATOR: &str = " · ";
 pub const MAX_OUTBOUNDS_PER_SUBSCRIPTION: usize = 1000;
-pub const DEFAULT_TEST_URL: &str = "https://www.gstatic.com/generate_204";
+pub const DEFAULT_TEST_URL: &str = "https://cp.cloudflare.com/generate_204";
 
 pub fn outbound_type(outbound: &Value) -> Option<&str> {
     outbound.get("type").and_then(Value::as_str)

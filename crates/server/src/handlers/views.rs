@@ -166,7 +166,5 @@ pub struct TestResponse {
     pub down_mbps: Option<f64>,
     pub up_mbps: Option<f64>,
     pub responsiveness: Option<f64>,
-    pub bytes: Option<u64>,
-    pub seconds: Option<f64>,
     pub source: String,
 }

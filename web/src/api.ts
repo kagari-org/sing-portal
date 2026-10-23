@@ -77,7 +77,7 @@ export interface Provider {
   nodes: ProviderNode[]
 }
 
-export type TestKind = 'latency' | 'bandwidth' | 'throughput' | 'both'
+export type TestKind = 'latency' | 'bandwidth' | 'both'
 
 export interface Measurement {
   tag: string
@@ -86,8 +86,6 @@ export interface Measurement {
   downMbps: number | null
   upMbps: number | null
   responsiveness: number | null
-  bytes: number | null
-  seconds: number | null
   source: 'agent'
 }
 

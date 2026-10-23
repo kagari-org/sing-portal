@@ -65,8 +65,6 @@ pub enum AgentMessage {
         down_mbps: Option<f64>,
         up_mbps: Option<f64>,
         responsiveness: Option<f64>,
-        bytes: Option<u64>,
-        seconds: Option<f64>,
     },
     SelectResult {
         id: String,
@@ -132,8 +130,6 @@ mod tests {
             down_mbps: Some(16.0),
             up_mbps: None,
             responsiveness: None,
-            bytes: Some(1024),
-            seconds: Some(0.5),
         };
         assert_eq!(result.id(), Some("42"));
 

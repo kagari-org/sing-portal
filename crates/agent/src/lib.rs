@@ -139,8 +139,6 @@ impl Agent {
                         down_mbps: measurement.down_mbps,
                         up_mbps: measurement.up_mbps,
                         responsiveness: measurement.responsiveness,
-                        bytes: measurement.bytes,
-                        seconds: measurement.seconds,
                     },
                     Err(error) => AgentMessage::Error {
                         id: Some(id),

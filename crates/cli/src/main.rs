@@ -134,20 +134,6 @@ struct AgentArgs {
     )]
     test_latency_url: String,
 
-    #[arg(
-        long,
-        env = "SING_PORTAL_TEST_DOWNLOAD_URL",
-        default_value = "https://speed.cloudflare.com/__down?bytes=10485760"
-    )]
-    test_download_url: String,
-
-    #[arg(
-        long,
-        env = "SING_PORTAL_TEST_MAX_BYTES",
-        default_value_t = 10 * 1024 * 1024
-    )]
-    test_max_bytes: usize,
-
     #[arg(long, env = "SING_PORTAL_TEST_TIMEOUT", default_value = "20s")]
     test_timeout: String,
 
@@ -163,6 +149,9 @@ struct AgentArgs {
 
     #[arg(long, env = "SING_PORTAL_API_SECRET")]
     api_secret: Option<String>,
+
+    #[arg(long, env = "SING_PORTAL_TEST_NQ_CONFIG_URL")]
+    test_nq_config_url: Option<String>,
 }
 
 #[tokio::main]
@@ -240,14 +229,12 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         health_timeout: parse_duration(&args.health_timeout).map_err(anyhow::Error::msg)?,
         tester: sing_portal_agent::tester::TesterConfig {
             sing_box: args.sing_box.clone().into(),
-            state_dir: args.state_dir.clone(),
-            latency_url: args.test_latency_url,
-            download_url: args.test_download_url,
-            max_bytes: args.test_max_bytes as u64,
-            timeout: parse_duration(&args.test_timeout).map_err(anyhow::Error::msg)?,
-            network_quality_runtime: args.test_nq_runtime,
             api_url: args.api_url,
             api_secret: args.api_secret,
+            latency_url: args.test_latency_url,
+            timeout: parse_duration(&args.test_timeout).map_err(anyhow::Error::msg)?,
+            network_quality_runtime: args.test_nq_runtime,
+            network_quality_config_url: args.test_nq_config_url,
         },
     };
 

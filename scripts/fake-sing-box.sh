@@ -1,6 +1,6 @@
 #!/bin/sh
 # Stand-in for the real sing-box binary during local runs.
-# Emulates the subcommands the agent uses: check / tools fetch / tools networkquality / api networkquality.
+# Emulates the subcommands the agent uses: check / api networkquality.
 # Set FAKE_SING_BOX_FAIL=1 to simulate a rejected config.
 
 if [ "${FAKE_SING_BOX_FAIL}" = "1" ]; then
@@ -9,10 +9,7 @@ if [ "${FAKE_SING_BOX_FAIL}" = "1" ]; then
 fi
 
 case "$1 $2" in
-  "tools fetch")
-    exec head -c 2097152 /dev/zero
-    ;;
-  "tools networkquality"|"api networkquality")
+  "api networkquality")
     cat <<'EOF'
 ==== NETWORK QUALITY TEST ====
 Idle Latency: 12 ms Accuracy: High

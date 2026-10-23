@@ -262,8 +262,6 @@ pub async fn probe(
             down_mbps,
             up_mbps,
             responsiveness,
-            bytes,
-            seconds,
             ..
         } => Ok(crate::handlers::views::TestResponse {
             tag: tag.to_string(),
@@ -272,8 +270,6 @@ pub async fn probe(
             down_mbps,
             up_mbps,
             responsiveness,
-            bytes,
-            seconds,
             source: "agent".to_string(),
         }),
         AgentMessage::Error { message, .. } => Err(ApiError::Upstream(message)),

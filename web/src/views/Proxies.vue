@@ -37,9 +37,14 @@ const latency = reactive<Record<string, Measurement>>({})
 const bandwidth = reactive<Record<string, Measurement>>({})
 const errors = reactive<Record<string, string>>({})
 const scores = ref<MeasurementRow[]>([])
+const evaluating = ref(false)
 const busy = ref<string | null>(null)
 const bulk = ref<TestKind | null>(null)
 const progress = ref({ done: 0, total: 0 })
+
+const testMachineMode = computed(
+  () => store.machines.find((machine) => machine.name === testMachine.value)?.mode ?? null,
+)
 
 const machineOptions = computed(() =>
   store.machines.map((machine) => ({
@@ -204,6 +209,23 @@ async function runTest(row: Row, kind: TestKind) {
   }
 }
 
+async function evaluate() {
+  const machine = testMachine.value
+  if (!machine) {
+    message.warning('Pick a machine to evaluate on')
+    return
+  }
+  evaluating.value = true
+  try {
+    const result = await api.runAuto(machine)
+    message.info(`evaluation ${result.status}, scores refresh automatically`)
+  } catch (error) {
+    message.error((error as Error).message)
+  } finally {
+    evaluating.value = false
+  }
+}
+
 async function runAll(kind: TestKind) {
   if (!testMachine.value) {
     message.warning('Pick a machine to run the tests on')
@@ -311,6 +333,15 @@ onMounted(async () => {
         @click="runAll('bandwidth')"
       >
         Test all bandwidth
+      </n-button>
+      <n-button
+        size="small"
+        :loading="evaluating"
+        :disabled="bulk !== null || busy !== null || testMachineMode !== 'auto'"
+        :title="testMachineMode === 'manual' ? 'switch the machine to auto first' : undefined"
+        @click="evaluate"
+      >
+        Evaluate
       </n-button>
       <n-text v-if="bulk" depth="3">
         {{ progress.done }}/{{ progress.total }}

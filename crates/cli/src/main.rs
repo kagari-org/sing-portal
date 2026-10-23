@@ -54,7 +54,7 @@ struct ServeArgs {
     #[arg(long, env = "SING_PORTAL_AUTO_INTERVAL", default_value = "10m")]
     auto_interval: String,
 
-    #[arg(long, env = "SING_PORTAL_AUTO_CANDIDATES", default_value_t = 5)]
+    #[arg(long, env = "SING_PORTAL_AUTO_CANDIDATES", default_value_t = 10)]
     auto_candidates: usize,
 
     #[arg(long, env = "SING_PORTAL_AUTO_MARGIN", default_value_t = 0.15)]

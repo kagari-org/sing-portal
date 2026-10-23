@@ -1,7 +1,7 @@
 use std::io::Write;
 
-use serde_json::Value;
-use sing_portal_core::render::{config, to_bytes};
+use serde_json::{Value, json};
+use sing_portal_core::render::{render, to_bytes};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -11,7 +11,8 @@ pub async fn check(state: &AppState, outbounds: &[Value]) -> ApiResult<bool> {
         return Ok(false);
     };
 
-    let config = config(outbounds);
+    let config = render(&json!({ "log": { "level": "warn" } }), outbounds)
+        .map_err(ApiError::from_core)?;
 
     let mut file = tempfile::Builder::new()
         .prefix("sing-portal-check-")

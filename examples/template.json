@@ -1,0 +1,20 @@
+{
+  "log": { "level": "warn" },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 7897
+    }
+  ],
+  "services": [
+    {
+      "type": "api",
+      "tag": "s_api",
+      "listen": "127.0.0.1",
+      "listen_port": 9091
+    }
+  ],
+  "route": { "final": "s_out" }
+}

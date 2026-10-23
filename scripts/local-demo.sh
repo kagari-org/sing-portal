@@ -63,7 +63,8 @@ echo "== start the agent (it dials the portal and registers itself)"
 "$binary" agent \
   --portal "$portal" \
   --name home \
-  --config "$work/run/outbounds.json" \
+  --template "$root/examples/template.json" \
+  --config "$work/run/config.json" \
   --state-dir "$work/state" \
   --sing-box "$root/scripts/fake-sing-box.sh" \
   --api-url "http://127.0.0.1:9091" \
@@ -120,8 +121,8 @@ done
 echo
 echo "== files written by the agent"
 ls -l "$work/state" "$work/run"
-echo "-- outbounds.json:"
-node -e 'const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(c.outbounds.slice(0,4).map(o=>`${o.type} ${o.tag}`).join("\n")+"\n...")' "$work/run/outbounds.json"
+echo "-- config.json outbounds:"
+node -e 'const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(c.outbounds.slice(0,4).map(o=>`${o.type} ${o.tag}`).join("\n")+"\n...")' "$work/run/config.json"
 echo "-- agent state:"
 json appliedRevision <"$work/state/state.json"
 json appliedSelection <"$work/state/state.json"

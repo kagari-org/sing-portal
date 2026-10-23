@@ -2,19 +2,23 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use sing_portal_core::model::outbound_tag;
-use sing_portal_core::render::{AUTO_TAG, DIRECT_TAG, SELECTOR_TAG, config, to_bytes};
-
 use crate::api::BoxApi;
+use sing_portal_core::model::outbound_tag;
+use sing_portal_core::render::{AUTO_TAG, DIRECT_TAG, SELECTOR_TAG, render, to_bytes};
+
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
 use crate::state;
 
 pub async fn apply(config: &AgentConfig, outbounds: &[Value], api: &BoxApi) -> Result<()> {
-    let bytes = to_bytes(&config_of(outbounds));
+    let template_bytes = tokio::fs::read(&config.template_path).await?;
+    let template: Value = serde_json::from_slice(&template_bytes)?;
+    let rendered = render(&template, outbounds)?;
+    let config_bytes = to_bytes(&rendered);
+    let outbounds_bytes = serde_json::to_vec_pretty(outbounds)?;
 
     let next = config.config_next_path();
-    state::write_atomic(&next, &bytes).await?;
+    state::write_atomic(&next, &config_bytes).await?;
     check(config, &next).await?;
 
     let outbounds_path = config.outbounds_path();
@@ -22,8 +26,8 @@ pub async fn apply(config: &AgentConfig, outbounds: &[Value], api: &BoxApi) -> R
         tokio::fs::copy(&outbounds_path, config.outbounds_previous_path()).await?;
     }
 
-    state::write_atomic(&outbounds_path, &serde_json::to_vec_pretty(outbounds)?).await?;
-    state::write_atomic(&config.config_path, &bytes).await?;
+    state::write_atomic(&outbounds_path, &outbounds_bytes).await?;
+    state::write_atomic(&config.config_path, &config_bytes).await?;
     let _ = tokio::fs::remove_file(&next).await;
 
     restart(config).await?;
@@ -94,20 +98,16 @@ async fn rollback(config: &AgentConfig, api: &BoxApi) -> Result<()> {
         ));
     }
 
-    let outbounds: Value = serde_json::from_slice(&tokio::fs::read(&previous).await?)?;
-    let outbounds = outbounds.as_array().cloned().unwrap_or_default();
-    state::write_atomic(
-        &config.outbounds_path(),
-        &serde_json::to_vec_pretty(&outbounds)?,
-    )
-    .await?;
-    state::write_atomic(&config.config_path, &to_bytes(&config_of(&outbounds))).await?;
+    let outbounds_bytes = tokio::fs::read(&previous).await?;
+    let outbounds: Vec<Value> = serde_json::from_slice(&outbounds_bytes)?;
+    let template_bytes = tokio::fs::read(&config.template_path).await?;
+    let template: Value = serde_json::from_slice(&template_bytes)?;
+    let config_bytes = to_bytes(&render(&template, &outbounds)?);
+
+    state::write_atomic(&config.outbounds_path(), &outbounds_bytes).await?;
+    state::write_atomic(&config.config_path, &config_bytes).await?;
     restart(config).await?;
     wait_healthy(config, api).await
-}
-
-fn config_of(outbounds: &[Value]) -> Value {
-    config(outbounds)
 }
 
 pub async fn apply_selection(
@@ -137,7 +137,7 @@ pub async fn apply_selection(
             if target != AUTO_TAG && api.select(SELECTOR_TAG, AUTO_TAG).await.is_ok() {
                 Ok(AUTO_TAG.to_string())
             } else {
-                Err(error)
+                Err(AgentError::BoxApi(error.to_string()))
             }
         }
     }

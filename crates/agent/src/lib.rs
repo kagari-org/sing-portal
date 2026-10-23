@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use sing_portal_core::protocol::{AgentMessage, ServerMessage};
-use sing_portal_core::render;
 use sing_portal_core::render::SELECTOR_TAG;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
@@ -37,8 +36,6 @@ impl Agent {
     }
 
     pub async fn run(self) -> Result<()> {
-        self.ensure_config().await;
-
         if self.config.once {
             return match self.session().await {
                 Ok(()) => Ok(()),
@@ -61,19 +58,6 @@ impl Agent {
             }
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(Duration::from_secs(30));
-        }
-    }
-
-    async fn ensure_config(&self) {
-        if tokio::fs::try_exists(&self.config.config_path)
-            .await
-            .unwrap_or(false)
-        {
-            return;
-        }
-        let bytes = render::to_bytes(&render::config(&[]));
-        if let Err(error) = state::write_atomic(&self.config.config_path, &bytes).await {
-            tracing::warn!(%error, "cannot write the initial outbounds config");
         }
     }
 

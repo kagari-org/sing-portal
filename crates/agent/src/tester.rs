@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -138,21 +138,26 @@ impl Tester {
 
     async fn latency(&self, tag: &str) -> Result<f64> {
         let before = self.api.outbounds().await?;
-        let Some(previous) = before.get(tag) else {
+        if !before.contains_key(tag) {
             return Err(AgentError::Measure(format!(
                 "outbound `{tag}` is not known to sing-box"
             )));
-        };
+        }
 
+        let triggered_at = unix_seconds();
         self.api.url_test(tag).await?;
-        let deadline = Instant::now() + self.config.timeout.max(Duration::from_secs(3));
 
+        // urlTestTime only has second resolution, so wait past the trigger
+        // second before trusting the reported delay
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+
+        let deadline = Instant::now() + self.config.timeout.max(Duration::from_secs(3));
         loop {
             let after = self.api.outbounds().await?;
-            if let Some(current) = after.get(tag)
-                && current.url_test_time != previous.url_test_time
+            if let Some(state) = after.get(tag)
+                && state.url_test_time >= triggered_at
             {
-                return match current.delay_ms {
+                return match state.delay_ms {
                     Some(millis) => Ok(millis as f64),
                     None => Err(AgentError::Measure(format!(
                         "url test failed for outbound `{tag}`"
@@ -198,4 +203,11 @@ impl Tester {
         }
         Ok(report)
     }
+}
+
+fn unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
 }

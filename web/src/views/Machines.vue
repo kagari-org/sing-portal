@@ -143,6 +143,7 @@ const columns = computed<DataTableColumns<Machine>>(() => [
             {
               size: 'small',
               loading: busy.value === `latency:${row.name}`,
+              disabled: testTag(row) === null,
               onClick: () => test(row),
             },
             { default: () => 'Test latency' },
@@ -199,12 +200,24 @@ async function choose(machine: Machine, value: string) {
   }
 }
 
+async function testTag(machine: Machine): string | null {
+  const tags = new Set(selectionOptions.value.map((option) => option.value))
+  if (tags.has(machine.selection)) return machine.selection
+  if (machine.best && tags.has(machine.best)) return machine.best
+  return null
+}
+
 async function test(machine: Machine) {
+  const tag = testTag(machine)
+  if (!tag) {
+    message.warning('automatic selection has not picked a node yet')
+    return
+  }
   busy.value = `latency:${machine.name}`
   try {
-    const result = await api.runTest(machine.name, machine.selection, 'latency')
+    const result = await api.runTest(machine.name, tag, 'latency')
     latency.value[machine.name] = result.latencyMs
-    message.success(`${machine.selection}: ${formatLatency(result.latencyMs)} via ${result.source}`)
+    message.success(`${tag}: ${formatLatency(result.latencyMs)} via ${result.source}`)
   } catch (error) {
     message.error((error as Error).message)
   } finally {

@@ -92,47 +92,58 @@ impl Agent {
             .map_err(|error| AgentError::Portal(error.to_string()))?;
         let (mut sink, mut stream) = socket.split();
 
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<Message>(64);
+        let writer = tokio::spawn(async move {
+            while let Some(message) = receiver.recv().await {
+                if sink.send(message).await.is_err() {
+                    break;
+                }
+            }
+        });
+
         let hello = AgentMessage::Hello {
             name: self.config.node_name.clone(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         };
-        sink.send(Message::Text(serialize(&hello)?.into()))
-            .await
-            .map_err(|error| AgentError::Portal(error.to_string()))?;
+        send_message(&sender, &hello).await?;
         tracing::info!(portal = %url, "agent connected");
 
         let mut ticker = tokio::time::interval(self.config.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await;
 
-        loop {
+        let result = loop {
             tokio::select! {
                 frame = stream.next() => {
                     match frame {
                         Some(Ok(Message::Text(text))) => {
                             let message: ServerMessage = serde_json::from_str(&text)?;
+                            if let ServerMessage::Test { id, kind, tag } = message {
+                                spawn_test(self.tester.clone(), sender.clone(), id, kind, tag);
+                                continue;
+                            }
                             let is_sync = matches!(message, ServerMessage::Sync { .. });
                             let reply = self.handle(message).await;
-                            sink.send(Message::Text(serialize(&reply)?.into()))
-                                .await
-                                .map_err(|error| AgentError::Portal(error.to_string()))?;
+                            send_message(&sender, &reply).await?;
                             if is_sync && self.config.once {
-                                return Ok(());
+                                break Ok(());
                             }
                         }
-                        Some(Ok(Message::Close(_))) | None => return Ok(()),
-                        Some(Err(error)) => return Err(AgentError::Portal(error.to_string())),
+                        Some(Ok(Message::Close(_))) | None => break Ok(()),
+                        Some(Err(error)) => break Err(AgentError::Portal(error.to_string())),
                         _ => {}
                     }
                 }
                 _ = ticker.tick() => {
                     let status = self.status().await;
-                    sink.send(Message::Text(serialize(&status)?.into()))
-                        .await
-                        .map_err(|error| AgentError::Portal(error.to_string()))?;
+                    send_message(&sender, &status).await?;
                 }
             }
-        }
+        };
+
+        drop(sender);
+        let _ = writer.await;
+        result
     }
 
     async fn handle(&self, message: ServerMessage) -> AgentMessage {
@@ -262,6 +273,47 @@ impl Agent {
 
 fn serialize(message: &AgentMessage) -> Result<String> {
     Ok(serde_json::to_string(message)?)
+}
+
+async fn send_message(sender: &tokio::sync::mpsc::Sender<Message>, message: &AgentMessage) -> Result<()> {
+    sender
+        .send(Message::Text(serialize(message)?.into()))
+        .await
+        .map_err(|_| AgentError::Portal("websocket writer closed".into()))
+}
+
+fn spawn_test(
+    tester: Tester,
+    sender: tokio::sync::mpsc::Sender<Message>,
+    id: String,
+    kind: String,
+    tag: String,
+) {
+    tokio::spawn(async move {
+        let message = match Kind::parse(&kind) {
+            Some(kind) => match tester.measure(&tag, kind).await {
+                Ok(measurement) => AgentMessage::TestResult {
+                    id,
+                    kind: measurement.kind,
+                    latency_ms: measurement.latency_ms,
+                    down_mbps: measurement.down_mbps,
+                    up_mbps: measurement.up_mbps,
+                    responsiveness: measurement.responsiveness,
+                },
+                Err(error) => AgentMessage::Error {
+                    id: Some(id),
+                    message: error.to_string(),
+                },
+            },
+            None => AgentMessage::Error {
+                id: Some(id),
+                message: format!("unknown test kind `{kind}`"),
+            },
+        };
+        if let Ok(text) = serialize(&message) {
+            let _ = sender.send(Message::Text(text.into())).await;
+        }
+    });
 }
 
 fn websocket_url(portal: &str) -> Result<Url> {

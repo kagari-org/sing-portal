@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use std::sync::Arc;
+
 use tokio::sync::Mutex;
 
 use crate::api::BoxApi;
@@ -104,10 +106,11 @@ pub struct NetworkQuality {
     pub upload_rpm: Option<f64>,
 }
 
+#[derive(Clone)]
 pub struct Tester {
     config: TesterConfig,
     api: BoxApi,
-    lock: Mutex<()>,
+    quality_lock: Arc<Mutex<()>>,
 }
 
 impl Tester {
@@ -115,21 +118,22 @@ impl Tester {
         Self {
             config,
             api,
-            lock: Mutex::new(()),
+            quality_lock: Arc::new(Mutex::new(())),
         }
     }
 
     pub async fn measure(&self, tag: &str, kind: Kind) -> Result<Measurement> {
-        let _guard = self.lock.lock().await;
-
         match kind {
+            // latency probes only trigger url tests, they can run concurrently
             Kind::Latency => Ok(Measurement::latency(tag, self.latency(tag).await?)),
             Kind::Bandwidth => {
+                let _guard = self.quality_lock.lock().await;
                 let report = self.quality(tag).await?;
                 Ok(Measurement::bandwidth(tag, &report))
             }
             Kind::Both => {
                 let latency = self.latency(tag).await?;
+                let _guard = self.quality_lock.lock().await;
                 let report = self.quality(tag).await?;
                 Ok(Measurement::both(tag, latency, &report))
             }

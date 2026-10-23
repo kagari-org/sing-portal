@@ -1,3 +1,4 @@
+use futures_util::StreamExt;
 use std::cmp::Ordering;
 use std::time::Duration;
 
@@ -88,14 +89,24 @@ pub async fn evaluate_machine(state: &AppState, machine: &str) -> ApiResult<Opti
         return Ok(None);
     }
 
-    let mut latency: Vec<(String, f64)> = Vec::new();
-    for tag in &tags {
-        if let Ok(probe) = service::probe(state, machine, tag, "latency").await
-            && let Some(latency_ms) = probe.latency_ms
-        {
-            latency.push((tag.clone(), latency_ms));
+    let mut latency: Vec<(String, f64)> = futures_util::stream::iter(tags.iter().cloned().map(|tag| {
+        let state = state.clone();
+        let machine = machine.to_string();
+        async move {
+            match service::probe(&state, &machine, &tag, "latency").await {
+                Ok(probe) => probe.latency_ms.map(|latency_ms| (tag, latency_ms)),
+                Err(error) => {
+                    tracing::debug!(%machine, %tag, %error, "auto latency probe failed");
+                    None
+                }
+            }
         }
-    }
+    }))
+    .buffer_unordered(8)
+    .filter_map(std::future::ready)
+    .collect()
+    .await;
+
     if latency.is_empty() {
         return Ok(None);
     }

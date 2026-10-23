@@ -200,7 +200,7 @@ async function choose(machine: Machine, value: string) {
   }
 }
 
-async function testTag(machine: Machine): string | null {
+function testTag(machine: Machine): string | null {
   const tags = new Set(selectionOptions.value.map((option) => option.value))
   if (tags.has(machine.selection)) return machine.selection
   if (machine.best && tags.has(machine.best)) return machine.best

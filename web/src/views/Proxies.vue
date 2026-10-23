@@ -258,6 +258,10 @@ watch(testMachine, () => {
   loadScores()
 })
 
+watch(() => store.tick, () => {
+  loadScores()
+})
+
 onMounted(async () => {
   await Promise.all([store.loadProviders(), store.loadMachines()])
   testMachine.value =

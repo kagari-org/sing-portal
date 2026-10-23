@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { h, onMounted, ref } from 'vue'
+import { h, onMounted, ref, watch } from 'vue'
 import {
   NAlert,
   NButton,
@@ -11,7 +11,9 @@ import {
   type DataTableColumns,
 } from 'naive-ui'
 import { api, formatTimestamp, type AuditEntry, type Snapshot } from '../api'
+import { usePortalStore } from '../stores/portal'
 
+const store = usePortalStore()
 const message = useMessage()
 const audit = ref<AuditEntry[]>([])
 const importing = ref(false)
@@ -72,6 +74,10 @@ async function onFilePicked(event: Event) {
 }
 
 onMounted(loadAudit)
+
+watch(() => store.tick, () => {
+  loadAudit()
+})
 </script>
 
 <template>

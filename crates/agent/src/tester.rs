@@ -49,6 +49,8 @@ pub struct TesterConfig {
     pub max_bytes: u64,
     pub timeout: Duration,
     pub network_quality_runtime: u64,
+    pub api_url: Option<String>,
+    pub api_secret: Option<String>,
 }
 
 impl Default for TesterConfig {
@@ -61,6 +63,8 @@ impl Default for TesterConfig {
             max_bytes: 10 * 1024 * 1024,
             timeout: Duration::from_secs(20),
             network_quality_runtime: 8,
+            api_url: None,
+            api_secret: None,
         }
     }
 }
@@ -223,6 +227,56 @@ impl Tester {
     }
 
     async fn network_quality(&self, tag: &str) -> Result<NetworkQuality> {
+        let output = match &self.config.api_url {
+            Some(api_url) => self.api_network_quality(api_url, tag).await?,
+            None => self.tools_network_quality(tag).await?,
+        };
+
+        let report = parse_network_quality(&String::from_utf8_lossy(&output.stdout));
+        if report.download_mbps.is_none() && report.upload_mbps.is_none() {
+            return Err(AgentError::Measure(
+                "network quality test reported no capacity".into(),
+            ));
+        }
+        Ok(report)
+    }
+
+    async fn api_network_quality(
+        &self,
+        api_url: &str,
+        tag: &str,
+    ) -> Result<std::process::Output> {
+        let runtime = self.config.network_quality_runtime.to_string();
+        let mut command = tokio::process::Command::new(&self.config.sing_box);
+        command
+            .args(["api", "networkquality"])
+            .args(["--url", api_url])
+            .args(["-o", tag])
+            .args(["--max-runtime", &runtime]);
+        if let Some(secret) = &self.config.api_secret {
+            command.args(["--secret", secret]);
+        }
+
+        let output = tokio::time::timeout(
+            Duration::from_secs(self.config.network_quality_runtime + 30),
+            command.output(),
+        )
+        .await
+        .map_err(|_| AgentError::Measure("network quality test timed out".into()))?
+        .map_err(|error| {
+            AgentError::Measure(format!("cannot call the sing-box api: {error}"))
+        })?;
+
+        if !output.status.success() {
+            return Err(AgentError::Measure(format!(
+                "sing-box api networkquality failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(output)
+    }
+
+    async fn tools_network_quality(&self, tag: &str) -> Result<std::process::Output> {
         let probe_config = self.write_probe_config(tag).await?;
         let runtime = self.config.network_quality_runtime.to_string();
 
@@ -249,14 +303,7 @@ impl Tester {
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
-
-        let report = parse_network_quality(&String::from_utf8_lossy(&output.stdout));
-        if report.download_mbps.is_none() && report.upload_mbps.is_none() {
-            return Err(AgentError::Measure(
-                "network quality test reported no capacity".into(),
-            ));
-        }
-        Ok(report)
+        Ok(output)
     }
 
     async fn throughput(&self, tag: &str, url: &str) -> Result<(u64, f64)> {

@@ -111,6 +111,48 @@ Download Responsiveness: 600 RPM Accuracy: Medium\nEOF\n",
 }
 
 #[tokio::test]
+async fn network_quality_prefers_the_sing_box_api() {
+    let dir = TempDir::new().unwrap();
+    let script = script(
+        &dir,
+        r#"#!/bin/sh
+case "$1 $2" in
+  "api networkquality")
+    cat <<EOF
+Download Capacity: 64.0 Mbps
+Upload Capacity: 32.0 Mbps
+EOF
+    ;;
+  *)
+    echo "unexpected args: $@" >&2
+    exit 1
+    ;;
+esac
+"#,
+    );
+    let clash = MockServer::start().await;
+
+    let tester = Tester::new(
+        TesterConfig {
+            sing_box: script,
+            state_dir: state_dir(&dir),
+            network_quality_runtime: 2,
+            api_url: Some("http://127.0.0.1:19091".into()),
+            ..Default::default()
+        },
+        ClashClient::new(&clash.uri(), Duration::from_secs(5)).unwrap(),
+    )
+    .unwrap();
+
+    let measurement = tester
+        .measure("node-a", Kind::Bandwidth, None)
+        .await
+        .unwrap();
+    assert_eq!(measurement.down_mbps, Some(64.0));
+    assert_eq!(measurement.up_mbps, Some(32.0));
+}
+
+#[tokio::test]
 async fn latency_uses_the_clash_delay_api() {
     let dir = TempDir::new().unwrap();
     let script = script(&dir, "#!/bin/sh\nexit 0\n");

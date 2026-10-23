@@ -56,6 +56,7 @@ curl -fsS "$portal/api/healthz" >/dev/null
   --state-dir "$work/state" \
   --sing-box "$root/scripts/fake-sing-box.sh" \
   --clash "http://127.0.0.1:$clash_port" \
+  --api-url "http://127.0.0.1:19091" \
   --restart-cmd "" \
   --interval 3s \
   >"$work/agent.log" 2>&1 &
@@ -103,7 +104,7 @@ curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
   --data '{"tag":"provider-a · HY2","kind":"latency"}' "$portal/api/nodes/home/test"
 echo
 
-echo "== bandwidth test (sing-box tools networkquality on the agent)"
+echo "== bandwidth test (sing-box api networkquality on the agent)"
 curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
   --data '{"tag":"provider-a · HY2","kind":"bandwidth"}' "$portal/api/nodes/home/test"
 echo

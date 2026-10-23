@@ -157,6 +157,12 @@ struct AgentArgs {
         default_value_t = 8
     )]
     test_nq_runtime: u64,
+
+    #[arg(long, env = "SING_PORTAL_API_URL")]
+    api_url: Option<String>,
+
+    #[arg(long, env = "SING_PORTAL_API_SECRET")]
+    api_secret: Option<String>,
 }
 
 #[tokio::main]
@@ -240,6 +246,8 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
             max_bytes: args.test_max_bytes as u64,
             timeout: parse_duration(&args.test_timeout).map_err(anyhow::Error::msg)?,
             network_quality_runtime: args.test_nq_runtime,
+            api_url: args.api_url,
+            api_secret: args.api_secret,
         },
     };
 

@@ -1,45 +1,37 @@
 pub mod apply;
 pub mod config;
 pub mod error;
-pub mod portal;
 pub mod state;
 pub mod tester;
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use sing_portal_core::canonical::selection_revision;
+use futures_util::{SinkExt, StreamExt};
 use sing_portal_core::clash_api::ClashClient;
-use sing_portal_core::render::AUTO_TAG;
+use sing_portal_core::protocol::{AgentMessage, ServerMessage};
+use sing_portal_core::render::SELECTOR_TAG;
+use tokio_tungstenite::tungstenite::Message;
+use url::Url;
 
 pub use config::AgentConfig;
 pub use error::{AgentError, Result};
-use portal::{PortalClient, Report};
-
-#[derive(Debug, Clone)]
-pub struct Outcome {
-    pub revision: String,
-    pub selection: String,
-    pub health: String,
-    pub error: String,
-    pub applied: bool,
-}
+use tester::{Kind, Tester};
 
 pub struct Agent {
     config: AgentConfig,
-    portal: PortalClient,
     clash: ClashClient,
+    tester: Tester,
 }
 
 impl Agent {
     pub fn new(config: AgentConfig) -> Result<Self> {
-        let portal = PortalClient::new(&config.portal_url, &config.node_name)?;
         let clash = ClashClient::new(&config.clash_url, Duration::from_secs(5))
             .map_err(|error| AgentError::Clash(error.to_string()))?;
+        let tester = Tester::new(config.tester.clone(), clash.clone())?;
         Ok(Self {
             config,
-            portal,
             clash,
+            tester,
         })
     }
 
@@ -47,156 +39,233 @@ impl Agent {
         &self.config
     }
 
-    pub async fn run_once(&self) -> Result<Outcome> {
-        let mut local = state::load(&self.config.local_state_path()).await;
-        let cached_selection_revision = if local.applied_selection.is_empty() {
-            None
-        } else {
-            Some(selection_revision(
-                &self.config.node_name,
-                &local.applied_selection,
-            ))
-        };
-
-        let fetched = self
-            .portal
-            .fetch_state(
-                Some(&local.applied_revision),
-                cached_selection_revision.as_deref(),
-            )
-            .await;
-
-        let mut health = "ok".to_string();
-        let mut error = String::new();
-        let mut applied = false;
-
-        match fetched {
-            Ok(None) => {
-                if let Err(selection_error) = self.apply_selection(&local.applied_selection).await {
-                    health = "degraded".into();
-                    error = selection_error.to_string();
-                }
-            }
-            Ok(Some(node_state)) => {
-                if node_state.revision == "none" || node_state.outbounds.is_empty() {
-                    health = "no_active_subscriptions".into();
-                } else {
-                    match apply::apply(&self.config, &node_state.outbounds, &self.clash).await {
-                        Ok(()) => {
-                            local.applied_revision = node_state.revision.clone();
-                            applied = true;
-                        }
-                        Err(apply_error) => {
-                            health = "rollback".into();
-                            error = apply_error.to_string();
-                        }
-                    }
-                }
-
-                if health == "ok" || health == "no_active_subscriptions" {
-                    let tags = apply::tags_of(&node_state.outbounds);
-                    match apply::apply_selection(&self.clash, &node_state.selection, &tags).await {
-                        Ok(selection) => local.applied_selection = selection,
-                        Err(selection_error) => {
-                            health = "degraded".into();
-                            error = selection_error.to_string();
-                        }
-                    }
-                } else {
-                    local.applied_selection = node_state.selection.clone();
-                }
-            }
-            Err(portal_error) => {
-                health = "degraded".into();
-                error = portal_error.to_string();
-                if let Err(selection_error) = self.apply_selection(&local.applied_selection).await {
-                    tracing::warn!(%selection_error, "cannot re-apply cached selection");
-                }
-            }
-        }
-
-        local.last_error = error.clone();
-        local.updated_at = unix_now();
-        state::save(&self.config.local_state_path(), &local).await?;
-
-        let report = Report {
-            revision: local.applied_revision.clone(),
-            selection: local.applied_selection.clone(),
-            health: health.clone(),
-            error: error.clone(),
-        };
-        if let Err(report_error) = self.portal.report(&report).await {
-            tracing::warn!(%report_error, "cannot report status to portal");
-        }
-
-        Ok(Outcome {
-            revision: local.applied_revision,
-            selection: local.applied_selection,
-            health,
-            error,
-            applied,
-        })
-    }
-
-    async fn apply_selection(&self, desired: &str) -> Result<String> {
-        let tags = cached_tags(&self.config).await;
-        let desired = if desired.is_empty() { AUTO_TAG } else { desired };
-        apply::apply_selection(&self.clash, desired, &tags).await
-    }
-
     pub async fn run(self) -> Result<()> {
-        if let Some(listen) = self.config.test_listen {
-            let tester = Arc::new(tester::Tester::new(
-                self.config.tester.clone(),
-                self.clash.clone(),
-            )?);
-            tokio::spawn(async move {
-                if let Err(error) = tester.serve(listen).await {
-                    tracing::error!(%error, "agent test endpoint stopped");
-                }
-            });
-        }
-
         if self.config.once {
-            return match self.run_once().await {
-                Ok(outcome) => {
-                    tracing::info!(
-                        revision = %outcome.revision,
-                        selection = %outcome.selection,
-                        health = %outcome.health,
-                        applied = outcome.applied,
-                        "sync finished"
-                    );
-                    Ok(())
-                }
+            return match self.session().await {
+                Ok(()) => Ok(()),
                 Err(error) if self.config.best_effort => {
-                    tracing::warn!(%error, "sync failed, ignoring because of --best-effort");
+                    tracing::warn!(%error, "agent run failed, ignoring because of --best-effort");
                     Ok(())
                 }
                 Err(error) => Err(error),
             };
         }
 
+        let mut backoff = Duration::from_secs(1);
         loop {
-            if let Err(error) = self.run_once().await {
-                tracing::warn!(%error, "sync failed");
+            match self.session().await {
+                Ok(()) => {
+                    tracing::info!("agent session closed");
+                    backoff = Duration::from_secs(1);
+                }
+                Err(error) => tracing::warn!(%error, "agent session failed"),
             }
-            tokio::time::sleep(self.config.interval).await;
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(30));
+        }
+    }
+
+    async fn session(&self) -> Result<()> {
+        let url = websocket_url(&self.config.portal_url)?;
+        let (socket, _) = tokio_tungstenite::connect_async(url.as_str())
+            .await
+            .map_err(|error| AgentError::Portal(error.to_string()))?;
+        let (mut sink, mut stream) = socket.split();
+
+        let hello = AgentMessage::Hello {
+            name: self.config.node_name.clone(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        };
+        sink.send(Message::Text(serialize(&hello)?.into()))
+            .await
+            .map_err(|error| AgentError::Portal(error.to_string()))?;
+        tracing::info!(portal = %url, "agent connected");
+
+        let mut ticker = tokio::time::interval(self.config.interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await;
+
+        loop {
+            tokio::select! {
+                frame = stream.next() => {
+                    match frame {
+                        Some(Ok(Message::Text(text))) => {
+                            let message: ServerMessage = serde_json::from_str(&text)?;
+                            let is_sync = matches!(message, ServerMessage::Sync { .. });
+                            let reply = self.handle(message).await;
+                            sink.send(Message::Text(serialize(&reply)?.into()))
+                                .await
+                                .map_err(|error| AgentError::Portal(error.to_string()))?;
+                            if is_sync && self.config.once {
+                                return Ok(());
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | None => return Ok(()),
+                        Some(Err(error)) => return Err(AgentError::Portal(error.to_string())),
+                        _ => {}
+                    }
+                }
+                _ = ticker.tick() => {
+                    let status = self.status().await;
+                    sink.send(Message::Text(serialize(&status)?.into()))
+                        .await
+                        .map_err(|error| AgentError::Portal(error.to_string()))?;
+                }
+            }
+        }
+    }
+
+    async fn handle(&self, message: ServerMessage) -> AgentMessage {
+        match message {
+            ServerMessage::Sync {
+                id,
+                revision,
+                selection_revision: _,
+                selection,
+                outbounds,
+            } => self.sync(id, revision, selection, outbounds).await,
+            ServerMessage::Test { id, kind, tag, url } => {
+                let Some(kind) = Kind::parse(&kind) else {
+                    return AgentMessage::Error {
+                        id: Some(id),
+                        message: format!("unknown test kind `{kind}`"),
+                    };
+                };
+                match self.tester.measure(&tag, kind, url.as_deref()).await {
+                    Ok(measurement) => AgentMessage::TestResult {
+                        id,
+                        latency_ms: measurement.latency_ms,
+                        bytes: measurement.bytes,
+                        seconds: measurement.seconds,
+                        down_mbps: measurement.down_mbps,
+                        restored: measurement.restored,
+                    },
+                    Err(error) => AgentMessage::Error {
+                        id: Some(id),
+                        message: error.to_string(),
+                    },
+                }
+            }
+            ServerMessage::Select { id, outbound } => {
+                match self.clash.select(SELECTOR_TAG, &outbound).await {
+                    Ok(()) => AgentMessage::SelectResult { id, applied: true },
+                    Err(error) => AgentMessage::Error {
+                        id: Some(id),
+                        message: error.to_string(),
+                    },
+                }
+            }
+            ServerMessage::Proxies { id } => match self.clash.proxies().await {
+                Ok(proxies) => AgentMessage::ProxiesResult { id, proxies },
+                Err(error) => AgentMessage::Error {
+                    id: Some(id),
+                    message: error.to_string(),
+                },
+            },
+        }
+    }
+
+    async fn sync(
+        &self,
+        id: String,
+        revision: String,
+        selection: String,
+        outbounds: Vec<serde_json::Value>,
+    ) -> AgentMessage {
+        let mut local = state::load(&self.config.local_state_path()).await;
+        let mut health = "ok".to_string();
+        let mut error = String::new();
+        let mut applied = false;
+
+        let empty = revision == "none" || outbounds.is_empty();
+        if empty {
+            health = "no_active_subscriptions".to_string();
+        } else if revision != local.applied_revision {
+            match apply::apply(&self.config, &outbounds, &self.clash).await {
+                Ok(()) => {
+                    local.applied_revision = revision.clone();
+                    applied = true;
+                }
+                Err(apply_error) => {
+                    health = "rollback".to_string();
+                    error = apply_error.to_string();
+                }
+            }
+        }
+
+        if health == "ok" || empty {
+            let tags = apply::tags_of(&outbounds);
+            match apply::apply_selection(&self.clash, &selection, &tags).await {
+                Ok(selection) => local.applied_selection = selection,
+                Err(selection_error) => {
+                    health = "degraded".to_string();
+                    error = selection_error.to_string();
+                }
+            }
+        } else {
+            local.applied_selection = selection;
+        }
+
+        local.last_error = error.clone();
+        local.updated_at = unix_now();
+        if let Err(save_error) = state::save(&self.config.local_state_path(), &local).await {
+            tracing::warn!(%save_error, "cannot persist agent state");
+        }
+
+        AgentMessage::SyncResult {
+            id,
+            revision: local.applied_revision,
+            selection: local.applied_selection,
+            health,
+            error,
+            applied,
+        }
+    }
+
+    async fn status(&self) -> AgentMessage {
+        let local = state::load(&self.config.local_state_path()).await;
+        let selection = self
+            .clash
+            .current_selection()
+            .await
+            .unwrap_or_else(|_| local.applied_selection.clone());
+        let health = if local.last_error.is_empty() {
+            "ok"
+        } else {
+            "degraded"
+        };
+
+        AgentMessage::Status {
+            revision: local.applied_revision,
+            selection,
+            health: health.to_string(),
+            error: local.last_error,
         }
     }
 }
 
-async fn cached_tags(config: &AgentConfig) -> Vec<String> {
-    match tokio::fs::read(config.outbounds_path()).await {
-        Ok(bytes) => match serde_json::from_slice::<Vec<serde_json::Value>>(&bytes) {
-            Ok(outbounds) => apply::tags_of(&outbounds),
-            Err(error) => {
-                tracing::warn!(%error, "cannot parse cached outbounds");
-                Vec::new()
-            }
-        },
-        Err(_) => Vec::new(),
-    }
+fn serialize(message: &AgentMessage) -> Result<String> {
+    Ok(serde_json::to_string(message)?)
+}
+
+fn websocket_url(portal: &str) -> Result<Url> {
+    let mut url = Url::parse(portal)
+        .map_err(|error| AgentError::Portal(format!("invalid portal url: {error}")))?;
+    let scheme = match url.scheme().to_string().as_str() {
+        "http" => "ws".to_string(),
+        "https" => "wss".to_string(),
+        "ws" | "wss" => url.scheme().to_string(),
+        other => {
+            return Err(AgentError::Portal(format!(
+                "unsupported portal scheme `{other}`"
+            )));
+        }
+    };
+    url.set_scheme(&scheme)
+        .map_err(|()| AgentError::Portal("cannot set websocket scheme".into()))?;
+    url.set_path("/api/v1/agent/ws");
+    url.set_query(None);
+    Ok(url)
 }
 
 fn unix_now() -> i64 {

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use sing_portal_agent::AgentConfig;
-use sing_portal_server::{AppState, ServerConfig, parse_duration, parse_nodes};
+use sing_portal_server::{AppState, ServerConfig, parse_duration};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -32,9 +32,6 @@ struct ServeArgs {
     #[arg(long, env = "SING_PORTAL_DB", default_value = "portal.db")]
     db: PathBuf,
 
-    #[arg(long, env = "SING_PORTAL_NODES", default_value = "")]
-    nodes: String,
-
     #[arg(long, env = "SING_PORTAL_SING_BOX")]
     sing_box: Option<PathBuf>,
 
@@ -56,9 +53,6 @@ struct ServeArgs {
 
     #[arg(long, env = "SING_PORTAL_STATIC_DIR")]
     static_dir: Option<PathBuf>,
-
-    #[arg(long, env = "SING_PORTAL_TEST_PORT", default_value_t = 3016)]
-    test_port: u16,
 
     #[arg(long, env = "SING_PORTAL_AUTO_INTERVAL", default_value = "10m")]
     auto_interval: String,
@@ -133,9 +127,6 @@ struct AgentArgs {
     #[arg(long = "best-effort")]
     best_effort: bool,
 
-    #[arg(long, env = "SING_PORTAL_TEST_LISTEN")]
-    test_listen: Option<SocketAddr>,
-
     #[arg(
         long,
         env = "SING_PORTAL_PROXY_INBOUND",
@@ -193,7 +184,6 @@ async fn serve(args: ServeArgs) -> Result<()> {
     let config = ServerConfig {
         listen: args.listen,
         db_path: args.db,
-        nodes: parse_nodes(&args.nodes).map_err(anyhow::Error::msg)?,
         sing_box: args.sing_box,
         fetch_proxy: args.fetch_proxy,
         refresh_default: parse_duration(&args.refresh_default).map_err(anyhow::Error::msg)?,
@@ -201,7 +191,6 @@ async fn serve(args: ServeArgs) -> Result<()> {
         fetch_max_bytes: args.fetch_max_bytes,
         static_dir: args.static_dir,
         embed_web: true,
-        test_port: args.test_port,
         auto_interval: parse_duration(&args.auto_interval).map_err(anyhow::Error::msg)?,
         auto_candidates: args.auto_candidates,
         auto_margin: args.auto_margin,
@@ -215,9 +204,6 @@ async fn serve(args: ServeArgs) -> Result<()> {
     let state = AppState::new(config)
         .await
         .context("cannot open portal database")?;
-    sing_portal_server::service::init_nodes(&state)
-        .await
-        .context("cannot initialise node selections")?;
 
     let scheduler = tokio::spawn(sing_portal_server::scheduler::run(state.clone()));
     let auto = tokio::spawn(sing_portal_server::auto::run(state.clone()));
@@ -246,7 +232,6 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         once: args.once,
         best_effort: args.best_effort,
         health_timeout: parse_duration(&args.health_timeout).map_err(anyhow::Error::msg)?,
-        test_listen: args.test_listen,
         tester: sing_portal_agent::tester::TesterConfig {
             proxy_inbound: args.proxy_inbound,
             latency_url: args.test_latency_url,

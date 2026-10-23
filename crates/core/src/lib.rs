@@ -5,6 +5,7 @@ pub mod detect;
 pub mod error;
 pub mod model;
 pub mod render;
+pub mod protocol;
 pub mod score;
 pub mod uri;
 

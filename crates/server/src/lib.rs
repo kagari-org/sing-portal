@@ -3,12 +3,13 @@ pub mod config;
 pub mod error;
 pub mod fetch;
 pub mod handlers;
+pub mod registry;
 pub mod scheduler;
 pub mod service;
 pub mod state;
 pub mod validate;
 
-pub use config::{NodeConfig, ServerConfig, mask_url, parse_duration, parse_nodes};
+pub use config::{ServerConfig, mask_url, parse_duration};
 pub use state::AppState;
 
 use axum::Json;
@@ -21,7 +22,7 @@ use axum::routing::{get, patch, post, put};
 use serde_json::json;
 use tower_http::trace::TraceLayer;
 
-use crate::handlers::{agent, api, assets, nodes, providers, subscriptions};
+use crate::handlers::{agent_ws, api, assets, nodes, providers, subscriptions};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -53,8 +54,7 @@ pub fn router(state: AppState) -> Router {
             "/api/nodes/{name}/measurements",
             get(nodes::measurements),
         )
-        .route("/api/v1/nodes/{name}/state", get(agent::state))
-        .route("/api/v1/nodes/{name}/status", post(agent::status))
+        .route("/api/v1/agent/ws", get(agent_ws::upgrade))
         .fallback(assets::handler)
         .layer(middleware::from_fn(write_guard))
         .layer(TraceLayer::new_for_http())

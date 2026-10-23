@@ -55,6 +55,8 @@ pub async fn run_once(state: &AppState) -> ApiResult<usize> {
             tracing::info!(nodes = ?reset, "selections reset to s_auto");
         }
 
+        service::broadcast_state(state).await;
+
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(error) = crate::auto::run_once(&state).await {

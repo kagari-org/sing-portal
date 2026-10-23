@@ -98,6 +98,7 @@ pub async fn import(
 
     state.store().import_snapshot(&snapshot).await?;
     service::reconcile_selections(&state).await?;
+    service::broadcast_state(&state).await;
     state
         .store()
         .record_audit(

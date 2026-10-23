@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 axum.workspace = true
+futures-util.workspace = true
 mime_guess.workspace = true
 reqwest.workspace = true
 rust-embed.workspace = true
@@ -24,5 +25,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
+futures-util.workspace = true
+tokio-tungstenite.workspace = true
 tempfile.workspace = true
 tower.workspace = true

@@ -1,12 +1,14 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use futures_util::{SinkExt, StreamExt};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
-use sing_portal_server::{AppState, NodeConfig, ServerConfig, router};
+use sing_portal_core::protocol::{AgentMessage, ServerMessage};
+use sing_portal_server::{AppState, ServerConfig, router};
 use tempfile::TempDir;
+use tokio_tungstenite::tungstenite::Message;
 use tower::ServiceExt;
 
 struct TestApp {
@@ -23,10 +25,6 @@ async fn app() -> TestApp {
     let config = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         db_path: dir.path().join("portal.db"),
-        nodes: vec![NodeConfig {
-            name: "home".into(),
-            address: "127.0.0.1:1".into(),
-        }],
         sing_box: None,
         fetch_proxy: None,
         refresh_default: Duration::from_secs(3600),
@@ -34,15 +32,14 @@ async fn app() -> TestApp {
         fetch_max_bytes: 1024 * 1024,
         static_dir: Some(static_dir),
         embed_web: false,
-        test_port: 3016,
         auto_interval: Duration::from_secs(600),
         auto_candidates: 5,
         auto_margin: 0.15,
-        score: sing_portal_agent_score(),
+        score: sing_portal_core::score::ScoreConfig::default(),
     };
 
     let state = AppState::new(config).await.unwrap();
-    sing_portal_server::service::init_nodes(&state).await.unwrap();
+    state.store().seed_selection("home", "s_auto").await.unwrap();
 
     TestApp { _dir: dir, state }
 }
@@ -53,10 +50,6 @@ fn request(method: &str, path: &str) -> axum::http::request::Builder {
         .uri(path)
         .header(header::CONTENT_TYPE, "application/json")
         .header("x-portal-request", "1")
-}
-
-fn sing_portal_agent_score() -> sing_portal_core::score::ScoreConfig {
-    sing_portal_core::score::ScoreConfig::default()
 }
 
 async fn body_json(response: axum::response::Response) -> Value {
@@ -82,6 +75,14 @@ async fn create_subscription(app: &TestApp, name: &str) -> Value {
     body["subscription"].clone()
 }
 
+async fn get_json(app: &TestApp, path: &str) -> Value {
+    let response = router(app.state.clone())
+        .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    body_json(response).await
+}
+
 #[tokio::test]
 async fn health_endpoint_reports_ok() {
     let app = app().await;
@@ -102,26 +103,14 @@ async fn health_endpoint_reports_ok() {
 #[tokio::test]
 async fn creates_subscription_from_pasted_content() {
     let app = app().await;
-    let subscription = create_subscription(&app, "Jichang A").await;
+    let subscription = create_subscription(&app, "Provider A").await;
 
-    assert_eq!(subscription["slug"], "jichang-a");
+    assert_eq!(subscription["slug"], "provider-a");
     assert_eq!(subscription["format"], "sing-box-json");
     assert_eq!(subscription["outboundCount"], 2);
     assert_eq!(subscription["source"], "manual");
     assert_eq!(subscription["validated"], false);
     assert_eq!(subscription["url"], Value::Null);
-
-    let response = router(app.state.clone())
-        .oneshot(
-            Request::builder()
-                .uri("/api/subscriptions")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let list = body_json(response).await;
-    assert_eq!(list.as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -159,124 +148,30 @@ async fn rejects_invalid_subscription_content() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(app.state.store().list_subscriptions().await.unwrap().len(), 0);
-}
-
-#[tokio::test]
-async fn node_state_supports_304() {
-    let app = app().await;
-    create_subscription(&app, "Jichang A").await;
-
-    let response = router(app.state.clone())
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/nodes/home/state")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let state = body_json(response).await;
-    assert!(state["revision"].as_str().unwrap().starts_with("sha256:"));
-    assert_eq!(state["selection"], "s_auto");
-    assert_eq!(state["outbounds"].as_array().unwrap().len(), 2);
-
-    let revision = state["revision"].as_str().unwrap().to_string();
-    let selection_revision = state["selectionRevision"].as_str().unwrap().to_string();
-    let uri = format!(
-        "/api/v1/nodes/home/state?revision={revision}&selectionRevision={selection_revision}"
+    assert_eq!(
+        app.state.store().list_subscriptions().await.unwrap().len(),
+        0
     );
-
-    let response = router(app.state.clone())
-        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
-
-    let response = router(app.state.clone())
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/nodes/unknown/state")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn disabled_subscription_publishes_none_revision() {
+async fn providers_group_nodes_by_subscription() {
     let app = app().await;
-    let subscription = create_subscription(&app, "Jichang A").await;
-    let id = subscription["id"].as_str().unwrap();
+    create_subscription(&app, "Provider A").await;
 
-    let response = router(app.state.clone())
-        .oneshot(
-            request("PATCH", &format!("/api/subscriptions/{id}"))
-                .body(Body::from(json!({ "enabled": false }).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let response = router(app.state.clone())
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/nodes/home/state")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let state = body_json(response).await;
-    assert_eq!(state["revision"], "none");
-    assert_eq!(state["outbounds"].as_array().unwrap().len(), 0);
-}
-
-#[tokio::test]
-async fn status_reports_are_stored() {
-    let app = app().await;
-    let payload = json!({
-        "revision": "sha256:abc",
-        "selection": "s_auto",
-        "health": "ok",
-        "error": ""
-    });
-
-    let response = router(app.state.clone())
-        .oneshot(
-            request("POST", "/api/v1/nodes/home/status")
-                .body(Body::from(payload.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-    let response = router(app.state.clone())
-        .oneshot(
-            Request::builder()
-                .uri("/api/nodes")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let nodes = body_json(response).await;
-    let node = &nodes[0];
-    assert_eq!(node["name"], "home");
-    assert_eq!(node["report"]["revision"], "sha256:abc");
-    assert_eq!(node["report"]["online"], true);
-    assert_eq!(node["reachable"], false);
+    let providers = get_json(&app, "/api/providers").await;
+    let provider = &providers[0];
+    assert_eq!(provider["name"], "Provider A");
+    assert_eq!(provider["slug"], "provider-a");
+    assert_eq!(provider["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(provider["nodes"][0]["kind"], "hysteria2");
+    assert_eq!(provider["nodes"][0]["server"], "jp.example.com");
 }
 
 #[tokio::test]
 async fn selection_validation_and_queueing() {
     let app = app().await;
-    create_subscription(&app, "Jichang A").await;
+    create_subscription(&app, "Provider A").await;
 
     let response = router(app.state.clone())
         .oneshot(
@@ -291,30 +186,61 @@ async fn selection_validation_and_queueing() {
     let response = router(app.state.clone())
         .oneshot(
             request("PUT", "/api/nodes/home/selection")
-                .body(Body::from(json!({ "outbound": "jichang-a · US 01" }).to_string()))
+                .body(Body::from(json!({ "outbound": "provider-a · US 01" }).to_string()))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
-    let body = body_json(response).await;
-    assert_eq!(body["applied"], false);
+    assert_eq!(body_json(response).await["applied"], false);
 
     assert_eq!(
         app.state.store().selection("home").await.unwrap(),
-        Some("jichang-a · US 01".to_string())
+        Some("provider-a · US 01".to_string())
     );
+}
+
+#[tokio::test]
+async fn selection_mode_can_be_toggled() {
+    let app = app().await;
+
+    let nodes = get_json(&app, "/api/nodes").await;
+    assert_eq!(nodes[0]["mode"], "auto");
+    assert_eq!(nodes[0]["reachable"], false);
+
+    let response = router(app.state.clone())
+        .oneshot(
+            request("PUT", "/api/nodes/home/mode")
+                .body(Body::from(json!({ "mode": "manual" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let nodes = get_json(&app, "/api/nodes").await;
+    assert_eq!(nodes[0]["mode"], "manual");
+
+    let response = router(app.state.clone())
+        .oneshot(
+            request("PUT", "/api/nodes/home/mode")
+                .body(Body::from(json!({ "mode": "sometimes" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn deleting_subscription_resets_selection() {
     let app = app().await;
-    let subscription = create_subscription(&app, "Jichang A").await;
+    let subscription = create_subscription(&app, "Provider A").await;
     let id = subscription["id"].as_str().unwrap().to_string();
 
     app.state
         .store()
-        .set_selection("home", "jichang-a · US 01")
+        .set_selection("home", "provider-a · US 01")
         .await
         .unwrap();
 
@@ -337,7 +263,7 @@ async fn deleting_subscription_resets_selection() {
 #[tokio::test]
 async fn export_import_roundtrip() {
     let app = app().await;
-    create_subscription(&app, "Jichang A").await;
+    create_subscription(&app, "Provider A").await;
 
     let response = router(app.state.clone())
         .oneshot(
@@ -362,24 +288,18 @@ async fn export_import_roundtrip() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert_eq!(app.state.store().list_subscriptions().await.unwrap().len(), 1);
+    assert_eq!(
+        app.state.store().list_subscriptions().await.unwrap().len(),
+        1
+    );
 }
 
 #[tokio::test]
 async fn revision_endpoint_counts_active_outbounds() {
     let app = app().await;
-    create_subscription(&app, "Jichang A").await;
+    create_subscription(&app, "Provider A").await;
 
-    let response = router(app.state.clone())
-        .oneshot(
-            Request::builder()
-                .uri("/api/revision")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = body_json(response).await;
+    let body = get_json(&app, "/api/revision").await;
     assert_eq!(body["outbounds"], 2);
     assert_eq!(body["enabledSubscriptions"], 1);
 }
@@ -390,7 +310,7 @@ async fn spa_fallback_serves_index() {
     let response = router(app.state.clone())
         .oneshot(
             Request::builder()
-                .uri("/nodes")
+                .uri("/proxies")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -399,38 +319,6 @@ async fn spa_fallback_serves_index() {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     assert!(String::from_utf8_lossy(&bytes).contains("portal"));
-}
-
-#[allow(dead_code)]
-fn assert_send_sync() {
-    fn check<T: Send + Sync>() {}
-    check::<AppState>();
-    let _: PathBuf = PathBuf::new();
-}
-
-#[tokio::test]
-async fn providers_group_nodes_by_subscription() {
-    let app = app().await;
-    create_subscription(&app, "Provider A").await;
-
-    let response = router(app.state.clone())
-        .oneshot(
-            Request::builder()
-                .uri("/api/providers")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let providers = body_json(response).await;
-    let provider = &providers[0];
-    assert_eq!(provider["name"], "Provider A");
-    assert_eq!(provider["slug"], "provider-a");
-    assert_eq!(provider["nodes"].as_array().unwrap().len(), 2);
-    assert_eq!(provider["nodes"][0]["kind"], "hysteria2");
-    assert_eq!(provider["nodes"][0]["server"], "jp.example.com");
 }
 
 #[tokio::test]
@@ -462,95 +350,84 @@ async fn test_endpoint_validates_kind_and_tags() {
 }
 
 #[tokio::test]
-async fn test_lock_is_shared_per_machine() {
+async fn agent_over_websocket_receives_state_and_reports_status() {
     let app = app().await;
-    let first = app.state.test_lock("home").await;
-    let second = app.state.test_lock("home").await;
-    other(&app, &first).await;
-    assert!(std::sync::Arc::ptr_eq(&first, &second));
-}
+    create_subscription(&app, "Provider A").await;
 
-#[allow(dead_code)]
-async fn other(app: &TestApp, first: &std::sync::Arc<tokio::sync::Mutex<()>>) {
-    let third = app.state.test_lock("other").await;
-    assert!(!std::sync::Arc::ptr_eq(first, &third));
-}
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let state = app.state.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router(state)).await.unwrap();
+    });
 
-#[tokio::test]
-async fn selection_mode_can_be_toggled() {
-    let app = app().await;
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{address}/api/v1/agent/ws"))
+            .await
+            .unwrap();
 
-    let response = router(app.state.clone())
-        .oneshot(
-            Request::builder()
-                .uri("/api/nodes")
-                .body(Body::empty())
-                .unwrap(),
-        )
+    socket
+        .send(Message::Text(
+            serde_json::to_string(&AgentMessage::Hello {
+                name: "home".into(),
+                version: "test".into(),
+            })
+            .unwrap()
+            .into(),
+        ))
         .await
         .unwrap();
-    let nodes = body_json(response).await;
-    assert_eq!(nodes[0]["mode"], "auto");
 
-    let response = router(app.state.clone())
-        .oneshot(
-            request("PUT", "/api/nodes/home/mode")
-                .body(Body::from(json!({ "mode": "manual" }).to_string()))
-                .unwrap(),
-        )
+    let frame = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let Message::Text(text) = frame else {
+        panic!("expected text frame");
+    };
+    let ServerMessage::Sync {
+        revision,
+        selection,
+        outbounds,
+        ..
+    } = serde_json::from_str(&text).unwrap()
+    else {
+        panic!("expected sync");
+    };
+    assert!(revision.starts_with("sha256:"));
+    assert_eq!(selection, "s_auto");
+    assert_eq!(outbounds.len(), 2);
+
+    socket
+        .send(Message::Text(
+            serde_json::to_string(&AgentMessage::Status {
+                revision: revision.clone(),
+                selection: "s_auto".into(),
+                health: "ok".into(),
+                error: String::new(),
+            })
+            .unwrap()
+            .into(),
+        ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
 
-    let response = router(app.state.clone())
-        .oneshot(
-            Request::builder()
-                .uri("/api/nodes")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let nodes = body_json(response).await;
-    assert_eq!(nodes[0]["mode"], "manual");
+    let mut report = None;
+    for _ in 0..50 {
+        report = app.state.store().report("home").await.unwrap();
+        if report.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let report = report.expect("status stored");
+    assert_eq!(report.revision, revision);
+    assert_eq!(report.health, "ok");
 
-    let response = router(app.state.clone())
-        .oneshot(
-            request("PUT", "/api/nodes/home/mode")
-                .body(Body::from(json!({ "mode": "sometimes" }).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
+    let nodes = get_json(&app, "/api/nodes").await;
+    assert_eq!(nodes[0]["reachable"], true);
+    assert_eq!(nodes[0]["version"], "test");
 
-#[tokio::test]
-async fn auto_evaluation_endpoint_is_accepted() {
-    let app = app().await;
-    let response = router(app.state.clone())
-        .oneshot(
-            request("POST", "/api/nodes/home/auto")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
-}
-
-#[tokio::test]
-async fn measurements_start_empty() {
-    let app = app().await;
-    let response = router(app.state.clone())
-        .oneshot(
-            Request::builder()
-                .uri("/api/nodes/home/measurements")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(body_json(response).await.as_array().unwrap().len(), 0);
+    server.abort();
 }

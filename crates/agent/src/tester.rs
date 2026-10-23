@@ -1,14 +1,6 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::extract::State;
-use axum::http::{Method, StatusCode};
-use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde::Serialize;
 use sing_portal_core::clash_api::ClashClient;
 use sing_portal_core::render::SELECTOR_TAG;
 use tokio::sync::Mutex;
@@ -264,88 +256,5 @@ impl Tester {
             return Err(AgentError::Measure("download returned no data".into()));
         }
         Ok((Duration::from_secs_f64(seconds), bytes, seconds))
-    }
-
-    pub async fn serve(self: Arc<Self>, listen: SocketAddr) -> std::io::Result<()> {
-        let router = Router::new()
-            .route("/healthz", get(health))
-            .route("/test/latency", post(latency))
-            .route("/test/bandwidth", post(bandwidth))
-            .route("/test/both", post(both))
-            .layer(axum::middleware::from_fn(require_portal_header))
-            .with_state(self);
-
-        let listener = tokio::net::TcpListener::bind(listen).await?;
-        tracing::info!(%listen, "agent test endpoint listening");
-        axum::serve(listener, router).await
-    }
-}
-
-async fn health(State(tester): State<Arc<Tester>>) -> impl IntoResponse {
-    let selection = tester.clash.current_selection().await.unwrap_or_default();
-    Json(json!({ "status": "ok", "selection": selection }))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TestRequest {
-    tag: String,
-    url: Option<String>,
-}
-
-async fn latency(
-    State(tester): State<Arc<Tester>>,
-    Json(request): Json<TestRequest>,
-) -> Response {
-    run(&tester, request, Kind::Latency).await
-}
-
-async fn bandwidth(
-    State(tester): State<Arc<Tester>>,
-    Json(request): Json<TestRequest>,
-) -> Response {
-    run(&tester, request, Kind::Bandwidth).await
-}
-
-async fn both(State(tester): State<Arc<Tester>>, Json(request): Json<TestRequest>) -> Response {
-    run(&tester, request, Kind::Both).await
-}
-
-async fn run(tester: &Tester, request: TestRequest, kind: Kind) -> Response {
-    match tester
-        .measure(&request.tag, kind, request.url.as_deref())
-        .await
-    {
-        Ok(measurement) => Json(measurement).into_response(),
-        Err(error) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": error.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-async fn require_portal_header(
-    request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> Response {
-    if request.method() == Method::GET {
-        return next.run(request).await;
-    }
-
-    let allowed = request
-        .headers()
-        .get("x-portal-request")
-        .and_then(|value| value.to_str().ok())
-        == Some("1");
-
-    if allowed {
-        next.run(request).await
-    } else {
-        (
-            StatusCode::FORBIDDEN,
-            Json(json!({ "error": "missing X-Portal-Request header" })),
-        )
-            .into_response()
     }
 }

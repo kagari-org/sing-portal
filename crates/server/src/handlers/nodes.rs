@@ -1,12 +1,9 @@
-use std::time::Duration;
-
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sing_portal_core::clash_api::ClashClient;
-use sing_portal_core::render::{AUTO_TAG, SELECTOR_TAG};
+use sing_portal_core::render::AUTO_TAG;
 use sing_portal_store::SelectionMode;
 
 use crate::error::{ApiError, ApiResult};
@@ -17,17 +14,18 @@ use crate::service;
 use crate::state::AppState;
 
 pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<NodeView>>> {
-    let mut views = Vec::with_capacity(state.config().nodes.len());
+    let machines = service::known_machines(&state).await?;
+    let mut views = Vec::with_capacity(machines.len());
 
-    for node in &state.config().nodes {
-        let selection = state.store().selection_with_mode(&node.name).await?;
+    for name in machines {
+        let selection = state.store().selection_with_mode(&name).await?;
         let (outbound, mode) = match selection {
             Some(selection) => (selection.outbound, selection.mode.as_str().to_string()),
             None => (AUTO_TAG.to_string(), SelectionMode::Auto.as_str().to_string()),
         };
 
-        let report = state.store().report(&node.name).await?;
-        let measurements = state.store().measurements(&node.name).await?;
+        let report = state.store().report(&name).await?;
+        let measurements = state.store().measurements(&name).await?;
         let best = measurements.first().map(|row| row.tag.clone());
         let best_score = measurements.first().map(|row| row.score);
         let score = measurements
@@ -36,12 +34,8 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<NodeView>
             .map(|row| row.score);
         let measured_at = measurements.first().map(|row| row.measured_at);
 
-        let client = ClashClient::new(&node.clash_base_url(), Duration::from_secs(2))
-            .map_err(ApiError::from_core)?;
-        let version = tokio::time::timeout(Duration::from_secs(1), client.version())
-            .await
-            .ok()
-            .and_then(Result::ok);
+        let reachable = state.registry().is_connected(&name).await;
+        let version = state.registry().version(&name).await;
 
         let online = report
             .as_ref()
@@ -49,15 +43,19 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<NodeView>
             .unwrap_or(false);
 
         views.push(NodeView {
-            name: node.name.clone(),
-            address: node.address.clone(),
+            name: name.clone(),
+            address: if reachable {
+                "agent connected".to_string()
+            } else {
+                "agent offline".to_string()
+            },
             selection: outbound,
             mode,
             score,
             best,
             best_score,
             measured_at,
-            reachable: version.is_some(),
+            reachable,
             version,
             report: report
                 .as_ref()
@@ -72,13 +70,10 @@ pub async fn proxies(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let node = state
-        .node(&name)
-        .ok_or_else(|| ApiError::NotFound(format!("unknown node {name}")))?;
-    let client = ClashClient::new(&node.clash_base_url(), Duration::from_secs(5))
-        .map_err(ApiError::from_core)?;
-    let proxies = client.proxies().await.map_err(ApiError::from_core)?;
-    Ok(Json(proxies))
+    if !service::is_known_machine(&state, &name).await {
+        return Err(ApiError::NotFound(format!("unknown machine {name}")));
+    }
+    Ok(Json(service::proxies(&state, &name).await?))
 }
 
 #[derive(Deserialize)]
@@ -91,9 +86,9 @@ pub async fn set_selection(
     Path(name): Path<String>,
     Json(request): Json<SelectionRequest>,
 ) -> ApiResult<(StatusCode, Json<SelectionResponse>)> {
-    let node = state
-        .node(&name)
-        .ok_or_else(|| ApiError::NotFound(format!("unknown node {name}")))?;
+    if !service::is_known_machine(&state, &name).await {
+        return Err(ApiError::NotFound(format!("unknown machine {name}")));
+    }
 
     let tags = service::active_tags(&state).await?;
     if !service::is_valid_choice(&request.outbound, &tags) {
@@ -112,16 +107,10 @@ pub async fn set_selection(
         .set_selection_mode(&name, SelectionMode::Manual)
         .await?;
 
-    let client = ClashClient::new(&node.clash_base_url(), Duration::from_secs(3))
-        .map_err(ApiError::from_core)?;
-    let applied = client
-        .select(SELECTOR_TAG, &request.outbound)
-        .await
-        .map(|()| true)
-        .unwrap_or_else(|error| {
-            tracing::warn!(node = %name, error = %error, "failed to apply selection, kept as desired value");
-            false
-        });
+    let applied = service::select(&state, &name, &request.outbound).await?;
+    if let Err(error) = service::push_state(&state, &name).await {
+        tracing::warn!(%name, %error, "cannot push selection to agent");
+    }
 
     state
         .store()
@@ -159,9 +148,9 @@ pub async fn set_mode(
     Path(name): Path<String>,
     Json(request): Json<ModeRequest>,
 ) -> ApiResult<Json<Value>> {
-    state
-        .node(&name)
-        .ok_or_else(|| ApiError::NotFound(format!("unknown node {name}")))?;
+    if !service::is_known_machine(&state, &name).await {
+        return Err(ApiError::NotFound(format!("unknown machine {name}")));
+    }
 
     let mode = SelectionMode::parse(&request.mode).ok_or_else(|| {
         ApiError::BadRequest(format!("unsupported selection mode `{}`", request.mode))
@@ -172,6 +161,10 @@ pub async fn set_mode(
         .store()
         .record_audit("ui", "selection.mode", &name, mode.as_str())
         .await?;
+
+    if let Err(error) = service::push_state(&state, &name).await {
+        tracing::warn!(%name, %error, "cannot push selection mode to agent");
+    }
 
     if mode == SelectionMode::Auto {
         spawn_evaluation(&state, &name).await;
@@ -184,9 +177,9 @@ pub async fn auto(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
-    state
-        .node(&name)
-        .ok_or_else(|| ApiError::NotFound(format!("unknown node {name}")))?;
+    if !service::is_known_machine(&state, &name).await {
+        return Err(ApiError::NotFound(format!("unknown machine {name}")));
+    }
 
     let status = spawn_evaluation(&state, &name).await;
     Ok((StatusCode::ACCEPTED, Json(status)))
@@ -196,9 +189,9 @@ pub async fn measurements(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<Vec<MeasurementView>>> {
-    state
-        .node(&name)
-        .ok_or_else(|| ApiError::NotFound(format!("unknown node {name}")))?;
+    if !service::is_known_machine(&state, &name).await {
+        return Err(ApiError::NotFound(format!("unknown machine {name}")));
+    }
 
     let rows = state.store().measurements(&name).await?;
     let best = rows.first().map(|row| row.tag.clone());
@@ -225,24 +218,16 @@ async fn spawn_evaluation(state: &AppState, name: &str) -> Value {
     let state = state.clone();
     let machine = name.to_string();
     tokio::spawn(async move {
-        if let Some(node) = state
-            .config()
-            .nodes
-            .iter()
-            .find(|node| node.name == machine)
-            .cloned()
-        {
-            match crate::auto::evaluate_machine(&state, &node).await {
-                Ok(Some(evaluation)) => tracing::info!(
-                    machine = %machine,
-                    switched = evaluation.switched,
-                    best = ?evaluation.best,
-                    score = ?evaluation.score,
-                    "auto selection evaluated"
-                ),
-                Ok(None) => {}
-                Err(error) => tracing::warn!(machine = %machine, %error, "auto selection failed"),
-            }
+        match crate::auto::evaluate_machine(&state, &machine).await {
+            Ok(Some(evaluation)) => tracing::info!(
+                machine = %machine,
+                switched = evaluation.switched,
+                best = ?evaluation.best,
+                score = ?evaluation.score,
+                "auto selection evaluated"
+            ),
+            Ok(None) => {}
+            Err(error) => tracing::warn!(machine = %machine, %error, "auto selection failed"),
         }
         state.end_auto(&machine).await;
     });
@@ -263,9 +248,9 @@ pub async fn test(
     Path(name): Path<String>,
     Json(request): Json<TestRequest>,
 ) -> ApiResult<Json<TestResponse>> {
-    let node = state
-        .node(&name)
-        .ok_or_else(|| ApiError::NotFound(format!("unknown node {name}")))?;
+    if !service::is_known_machine(&state, &name).await {
+        return Err(ApiError::NotFound(format!("unknown machine {name}")));
+    }
 
     let tags = service::active_tags(&state).await?;
     if !tags.iter().any(|tag| tag == &request.tag) {
@@ -283,6 +268,6 @@ pub async fn test(
     }
 
     Ok(Json(
-        service::probe(&state, node, &request.tag, kind, request.url.as_deref()).await?,
+        service::probe(&state, &name, &request.tag, kind, request.url.as_deref()).await?,
     ))
 }

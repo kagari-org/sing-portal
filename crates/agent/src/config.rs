@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -18,7 +17,6 @@ pub struct AgentConfig {
     pub once: bool,
     pub best_effort: bool,
     pub health_timeout: Duration,
-    pub test_listen: Option<SocketAddr>,
     pub tester: TesterConfig,
 }
 

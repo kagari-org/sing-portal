@@ -7,7 +7,6 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 work="${WORKDIR:-$root/.tmp/local}"
 portal_port="${PORTAL_PORT:-3915}"
 clash_port="${CLASH_PORT:-9090}"
-test_port="${TEST_PORT:-3016}"
 proxy_port="${PROXY_PORT:-7898}"
 binary="${SING_PORTAL_BIN:-$root/target/debug/sing-portal}"
 portal="http://127.0.0.1:$portal_port"
@@ -43,9 +42,7 @@ pids+=($!)
 "$binary" serve \
   --listen "127.0.0.1:$portal_port" \
   --db "$work/portal.db" \
-  --nodes "home=127.0.0.1:$clash_port" \
   --sing-box "$root/scripts/fake-sing-box.sh" \
-  --test-port "$test_port" \
   >"$work/portal.log" 2>&1 &
 pids+=($!)
 
@@ -67,7 +64,6 @@ curl -fsS "$portal/api/healthz" >/dev/null
   --clash "http://127.0.0.1:$clash_port" \
   --restart-cmd "" \
   --interval 3s \
-  --test-listen "127.0.0.1:$test_port" \
   --proxy-inbound "http://127.0.0.1:$proxy_port" \
   --test-latency-url "http://probe.invalid/" \
   --test-download-url "http://speed.invalid/payload" \
@@ -120,15 +116,6 @@ echo "== bandwidth test (runs on the agent, through its proxy inbound)"
 curl -fsS -X POST -H 'content-type: application/json' -H 'X-Portal-Request: 1' \
   --data '{"tag":"provider-a · HY2","kind":"bandwidth"}' "$portal/api/nodes/home/test"
 echo
-
-echo
-echo "== node state, then the same request again (expect 304)"
-state="$(curl -fsS "$portal/api/v1/nodes/home/state")"
-revision="$(echo "$state" | json revision)"
-selection_revision="$(echo "$state" | json selectionRevision)"
-code="$(curl -s -o /dev/null -w '%{http_code}' "$portal/api/v1/nodes/home/state?revision=$revision&selectionRevision=$selection_revision")"
-echo "revision: $revision"
-echo "second request -> HTTP $code"
 
 echo
 echo "== wait for the agent sync to land"

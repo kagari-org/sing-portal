@@ -1,16 +1,12 @@
 use std::cmp::Ordering;
 use std::time::Duration;
 
-use sing_portal_core::clash_api::ClashClient;
-use sing_portal_core::render::SELECTOR_TAG;
 use sing_portal_core::score::should_switch;
 use sing_portal_store::{Measurement, SelectionMode};
 
-use crate::config::NodeConfig;
 use crate::error::ApiResult;
-use crate::state::AppState;
-
 use crate::service;
+use crate::state::AppState;
 
 #[derive(Debug, Clone)]
 pub struct Evaluation {
@@ -55,28 +51,32 @@ pub async fn run(state: AppState) {
 pub async fn run_once(state: &AppState) -> ApiResult<Vec<Evaluation>> {
     let mut evaluations = Vec::new();
 
-    for node in state.config().nodes.clone() {
-        if !state.begin_auto(&node.name).await {
+    for machine in service::known_machines(state).await? {
+        if !state.registry().is_connected(&machine).await {
             continue;
         }
-        let result = evaluate_machine(state, &node).await;
-        state.end_auto(&node.name).await;
+        if !state.begin_auto(&machine).await {
+            continue;
+        }
+        let result = evaluate_machine(state, &machine).await;
+        state.end_auto(&machine).await;
 
         match result {
             Ok(Some(evaluation)) => evaluations.push(evaluation),
             Ok(None) => {}
-            Err(error) => tracing::warn!(machine = %node.name, %error, "auto selection failed"),
+            Err(error) => tracing::warn!(machine = %machine, %error, "auto selection failed"),
         }
     }
 
     Ok(evaluations)
 }
 
-pub async fn evaluate_machine(
-    state: &AppState,
-    node: &NodeConfig,
-) -> ApiResult<Option<Evaluation>> {
-    let Some(selection) = state.store().selection_with_mode(&node.name).await? else {
+pub async fn evaluate_machine(state: &AppState, machine: &str) -> ApiResult<Option<Evaluation>> {
+    if !state.registry().is_connected(machine).await {
+        return Ok(None);
+    }
+
+    let Some(selection) = state.store().selection_with_mode(machine).await? else {
         return Ok(None);
     };
     if selection.mode != SelectionMode::Auto {
@@ -90,7 +90,7 @@ pub async fn evaluate_machine(
 
     let mut latency: Vec<(String, f64)> = Vec::new();
     for tag in &tags {
-        if let Ok(probe) = service::probe(state, node, tag, "latency", None).await
+        if let Ok(probe) = service::probe(state, machine, tag, "latency", None).await
             && let Some(latency_ms) = probe.latency_ms
         {
             latency.push((tag.clone(), latency_ms));
@@ -120,14 +120,14 @@ pub async fn evaluate_machine(
     let mut scored: Vec<(String, f64, Option<f64>, Option<f64>)> = Vec::new();
 
     for tag in &candidates {
-        match service::probe(state, node, tag, "both", None).await {
+        match service::probe(state, machine, tag, "both", None).await {
             Ok(probe) => {
                 let score = state
                     .config()
                     .score
                     .score(probe.latency_ms.unwrap_or(f64::MAX), probe.down_mbps);
                 measurements.push(Measurement {
-                    node_name: node.name.clone(),
+                    node_name: machine.to_string(),
                     tag: tag.clone(),
                     latency_ms: probe.latency_ms,
                     down_mbps: probe.down_mbps,
@@ -139,9 +139,9 @@ pub async fn evaluate_machine(
                 }
             }
             Err(error) => {
-                tracing::debug!(machine = %node.name, %tag, %error, "auto probe failed");
+                tracing::debug!(%machine, %tag, %error, "auto probe failed");
                 measurements.push(Measurement {
-                    node_name: node.name.clone(),
+                    node_name: machine.to_string(),
                     tag: tag.clone(),
                     latency_ms: None,
                     down_mbps: None,
@@ -154,7 +154,7 @@ pub async fn evaluate_machine(
 
     state
         .store()
-        .replace_measurements(&node.name, &measurements)
+        .replace_measurements(machine, &measurements)
         .await?;
 
     if scored.is_empty() {
@@ -196,26 +196,26 @@ pub async fn evaluate_machine(
         || should_switch(best_score, current_score, state.config().auto_margin);
 
     if switch {
-        let applied = ClashClient::new(&node.clash_base_url(), Duration::from_secs(3))
-            .map_err(crate::error::ApiError::from_core)?
-            .select(SELECTOR_TAG, &best_tag)
+        let applied = service::select(state, machine, &best_tag)
             .await
-            .is_ok();
-
-        state.store().set_selection(&node.name, &best_tag).await?;
+            .unwrap_or(false);
+        state.store().set_selection(machine, &best_tag).await?;
+        if let Err(push_error) = service::push_state(state, machine).await {
+            tracing::warn!(%machine, %push_error, "cannot push auto selection");
+        }
         state
             .store()
             .record_audit(
                 "auto",
                 "selection.auto",
-                &node.name,
+                machine,
                 &format!("tag={best_tag} score={best_score:.1} applied={applied}"),
             )
             .await?;
     }
 
     Ok(Some(Evaluation {
-        machine: node.name.clone(),
+        machine: machine.to_string(),
         candidates: candidates.len(),
         best: Some(best_tag),
         score: Some(best_score),

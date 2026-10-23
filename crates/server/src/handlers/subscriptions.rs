@@ -100,6 +100,7 @@ pub async fn create(
         )
         .await?;
     service::reconcile_selections(&state).await?;
+    service::broadcast_state(&state).await;
 
     Ok((
         StatusCode::CREATED,
@@ -184,6 +185,7 @@ pub async fn patch(
         )
         .await?;
     service::reconcile_selections(&state).await?;
+    service::broadcast_state(&state).await;
 
     Ok(Json(MutationView {
         subscription: SubscriptionView::from(&updated),
@@ -207,6 +209,7 @@ pub async fn delete(
         .record_audit("ui", "subscription.delete", &subscription.slug, "")
         .await?;
     service::reconcile_selections(&state).await?;
+    service::broadcast_state(&state).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -236,6 +239,7 @@ pub async fn refresh(
         .record_audit("ui", "subscription.refresh", &updated.slug, "")
         .await?;
     service::reconcile_selections(&state).await?;
+    service::broadcast_state(&state).await;
 
     Ok(Json(MutationView {
         subscription: SubscriptionView::from(&updated),

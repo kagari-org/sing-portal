@@ -1,4 +1,4 @@
-pub mod agent;
+pub mod agent_ws;
 pub mod api;
 pub mod assets;
 pub mod nodes;

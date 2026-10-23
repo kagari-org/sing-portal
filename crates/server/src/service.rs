@@ -1,8 +1,6 @@
 use std::time::Duration;
 
-use sing_portal_core::clash_api::ClashClient;
-use sing_portal_core::model::DEFAULT_TEST_URL;
-
+use sing_portal_core::protocol::{AgentMessage, ServerMessage};
 use serde_json::Value;
 use sing_portal_core::canonical::{normalize, sort_by_tag};
 use sing_portal_core::detect::{Format, parse_subscription};
@@ -181,17 +179,6 @@ pub async fn reconcile_selections(state: &AppState) -> ApiResult<Vec<String>> {
     Ok(reset)
 }
 
-pub async fn init_nodes(state: &AppState) -> ApiResult<()> {
-    for node in &state.config().nodes {
-        state.store().seed_selection(&node.name, AUTO_TAG).await?;
-    }
-    Ok(())
-}
-
-pub fn is_valid_choice(choice: &str, tags: &[String]) -> bool {
-    matches!(choice, AUTO_TAG | DIRECT_TAG) || tags.iter().any(|tag| tag == choice)
-}
-
 pub async fn record_report(state: &AppState, report: NodeReport) -> ApiResult<bool> {
     let previous = state.store().report(&report.node_name).await?;
     let changed = previous
@@ -220,86 +207,187 @@ pub async fn record_report(state: &AppState, report: NodeReport) -> ApiResult<bo
     Ok(changed)
 }
 
+pub async fn known_machines(state: &AppState) -> ApiResult<Vec<String>> {
+    let mut names: std::collections::BTreeSet<String> =
+        state.registry().names().await.into_iter().collect();
+    for selection in state.store().selections().await? {
+        names.insert(selection.node_name);
+    }
+    for report in state.store().reports().await? {
+        names.insert(report.node_name);
+    }
+    Ok(names.into_iter().collect())
+}
+
+pub async fn is_known_machine(state: &AppState, name: &str) -> bool {
+    if state.registry().is_connected(name).await {
+        return true;
+    }
+    state
+        .store()
+        .selection(name)
+        .await
+        .map(|value| value.is_some())
+        .unwrap_or(false)
+        || state
+            .store()
+            .report(name)
+            .await
+            .map(|value| value.is_some())
+            .unwrap_or(false)
+}
+
 pub async fn probe(
     state: &AppState,
-    node: &crate::config::NodeConfig,
+    machine: &str,
     tag: &str,
     kind: &str,
     url: Option<&str>,
 ) -> ApiResult<crate::handlers::views::TestResponse> {
-    let lock = state.test_lock(&node.name).await;
-    let _guard = lock.lock().await;
+    let message = ServerMessage::Test {
+        id: uuid::Uuid::now_v7().to_string(),
+        kind: kind.to_string(),
+        tag: tag.to_string(),
+        url: url.map(ToString::to_string),
+    };
+    let timeout = match kind {
+        "bandwidth" | "both" => Duration::from_secs(90),
+        _ => Duration::from_secs(15),
+    };
 
-    let agent_url = format!(
-        "http://{}:{}/test/{}",
-        node.host(),
-        state.config().test_port,
-        kind
-    );
-    let payload = serde_json::json!({ "tag": tag, "url": url });
+    match state.registry().request(machine, message, timeout).await? {
+        AgentMessage::TestResult {
+            latency_ms,
+            bytes,
+            seconds,
+            down_mbps,
+            restored,
+            ..
+        } => Ok(crate::handlers::views::TestResponse {
+            tag: tag.to_string(),
+            kind: kind.to_string(),
+            latency_ms,
+            bytes,
+            seconds,
+            down_mbps,
+            source: "agent".to_string(),
+            restored: Some(restored),
+        }),
+        AgentMessage::Error { message, .. } => Err(ApiError::Upstream(message)),
+        other => Err(ApiError::Upstream(format!(
+            "unexpected agent reply: {other:?}"
+        ))),
+    }
+}
+
+pub async fn select(state: &AppState, machine: &str, outbound: &str) -> ApiResult<bool> {
+    let message = ServerMessage::Select {
+        id: uuid::Uuid::now_v7().to_string(),
+        outbound: outbound.to_string(),
+    };
 
     match state
-        .test_http()
-        .post(&agent_url)
-        .header("x-portal-request", "1")
-        .json(&payload)
-        .send()
+        .registry()
+        .request(machine, message, Duration::from_secs(5))
         .await
     {
-        Ok(response) if response.status().is_success() => {
-            let body: serde_json::Value = response.json().await.map_err(|error| {
-                ApiError::Upstream(format!("invalid node test response: {error}"))
-            })?;
-            Ok(crate::handlers::views::TestResponse {
-                tag: tag.to_string(),
-                kind: kind.to_string(),
-                latency_ms: body.get("latencyMs").and_then(serde_json::Value::as_f64),
-                bytes: body.get("bytes").and_then(serde_json::Value::as_u64),
-                seconds: body.get("seconds").and_then(serde_json::Value::as_f64),
-                down_mbps: body.get("downMbps").and_then(serde_json::Value::as_f64),
-                source: "agent".to_string(),
-                restored: body
-                    .get("restored")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToString::to_string),
-            })
-        }
-        Ok(response) => {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            fallback(node, tag, kind, format!("node test endpoint returned {status}: {text}")).await
-        }
+        Ok(AgentMessage::SelectResult { applied, .. }) => Ok(applied),
+        Ok(AgentMessage::Error { message, .. }) => Err(ApiError::Upstream(message)),
+        Ok(other) => Err(ApiError::Upstream(format!(
+            "unexpected agent reply: {other:?}"
+        ))),
         Err(error) => {
-            fallback(node, tag, kind, format!("node test endpoint unavailable: {error}")).await
+            tracing::debug!(%machine, %error, "selection not applied, kept as desired value");
+            Ok(false)
         }
     }
 }
 
-async fn fallback(
-    node: &crate::config::NodeConfig,
-    tag: &str,
-    kind: &str,
-    reason: String,
-) -> ApiResult<crate::handlers::views::TestResponse> {
-    if kind != "latency" {
-        return Err(ApiError::Upstream(reason));
+pub async fn proxies(state: &AppState, machine: &str) -> ApiResult<Value> {
+    let message = ServerMessage::Proxies {
+        id: uuid::Uuid::now_v7().to_string(),
+    };
+
+    match state
+        .registry()
+        .request(machine, message, Duration::from_secs(5))
+        .await?
+    {
+        AgentMessage::ProxiesResult { proxies, .. } => Ok(proxies),
+        AgentMessage::Error { message, .. } => Err(ApiError::Upstream(message)),
+        other => Err(ApiError::Upstream(format!(
+            "unexpected agent reply: {other:?}"
+        ))),
+    }
+}
+
+pub async fn push_state(state: &AppState, machine: &str) -> ApiResult<()> {
+    let outbounds = active_outbounds(state).await?;
+    let revision = sing_portal_core::canonical::revision(&outbounds);
+    let selection = state
+        .store()
+        .selection(machine)
+        .await?
+        .unwrap_or_else(|| AUTO_TAG.to_string());
+    let selection_revision = sing_portal_core::canonical::selection_revision(machine, &selection);
+
+    state
+        .registry()
+        .send(
+            machine,
+            ServerMessage::Sync {
+                id: uuid::Uuid::now_v7().to_string(),
+                revision,
+                selection_revision,
+                selection,
+                outbounds,
+            },
+        )
+        .await
+}
+
+pub async fn push_state_if_changed(
+    state: &AppState,
+    machine: &str,
+    reported_revision: &str,
+    reported_selection: &str,
+) -> ApiResult<()> {
+    let outbounds = active_outbounds(state).await?;
+    let revision = sing_portal_core::canonical::revision(&outbounds);
+    let selection = state
+        .store()
+        .selection(machine)
+        .await?
+        .unwrap_or_else(|| AUTO_TAG.to_string());
+
+    if revision == reported_revision && selection == reported_selection {
+        return Ok(());
     }
 
-    let client = ClashClient::new(&node.clash_base_url(), Duration::from_secs(10))
-        .map_err(ApiError::from_core)?;
-    let delay = client
-        .delay(tag, DEFAULT_TEST_URL, 5000)
+    let selection_revision = sing_portal_core::canonical::selection_revision(machine, &selection);
+    state
+        .registry()
+        .send(
+            machine,
+            ServerMessage::Sync {
+                id: uuid::Uuid::now_v7().to_string(),
+                revision,
+                selection_revision,
+                selection,
+                outbounds,
+            },
+        )
         .await
-        .map_err(ApiError::from_core)?;
+}
 
-    Ok(crate::handlers::views::TestResponse {
-        tag: tag.to_string(),
-        kind: "latency".to_string(),
-        latency_ms: Some(delay as f64),
-        bytes: None,
-        seconds: None,
-        down_mbps: None,
-        source: "clash".to_string(),
-        restored: None,
-    })
+pub async fn broadcast_state(state: &AppState) {
+    for machine in state.registry().names().await {
+        if let Err(error) = push_state(state, &machine).await {
+            tracing::warn!(%machine, %error, "cannot push state to agent");
+        }
+    }
+}
+
+pub fn is_valid_choice(choice: &str, tags: &[String]) -> bool {
+    matches!(choice, AUTO_TAG | DIRECT_TAG) || tags.iter().any(|tag| tag == choice)
 }

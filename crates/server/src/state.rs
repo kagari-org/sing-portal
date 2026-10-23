@@ -1,10 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use reqwest::redirect::Policy;
 use tokio::sync::Mutex;
 
-use crate::config::{NodeConfig, ServerConfig};
+use crate::config::ServerConfig;
+use crate::registry::{Registry, SharedRegistry};
 use sing_portal_store::{Store, StoreError};
 
 #[derive(Clone)]
@@ -12,11 +13,10 @@ pub struct AppState {
     config: Arc<ServerConfig>,
     store: Store,
     http: reqwest::Client,
-    test_http: reqwest::Client,
     proxy_http: Option<reqwest::Client>,
     refreshing: Arc<Mutex<HashSet<String>>>,
-    test_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     auto_running: Arc<Mutex<HashSet<String>>>,
+    registry: SharedRegistry,
 }
 
 impl AppState {
@@ -29,11 +29,6 @@ impl AppState {
             .build()
             .expect("http client");
 
-        let test_http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(90))
-            .build()
-            .expect("test http client");
-
         let proxy_http = match &config.fetch_proxy {
             Some(proxy) => match reqwest::Proxy::all(proxy) {
                 Ok(proxy) => Some(
@@ -44,8 +39,8 @@ impl AppState {
                         .build()
                         .expect("proxy http client"),
                 ),
-                Err(err) => {
-                    tracing::warn!(%proxy, error = %err, "ignoring invalid fetch proxy");
+                Err(error) => {
+                    tracing::warn!(%proxy, %error, "ignoring invalid fetch proxy");
                     None
                 }
             },
@@ -56,11 +51,10 @@ impl AppState {
             config: Arc::new(config),
             store,
             http,
-            test_http,
             proxy_http,
             refreshing: Arc::new(Mutex::new(HashSet::new())),
-            test_locks: Arc::new(Mutex::new(HashMap::new())),
             auto_running: Arc::new(Mutex::new(HashSet::new())),
+            registry: Arc::new(Registry::default()),
         })
     }
 
@@ -76,24 +70,12 @@ impl AppState {
         &self.http
     }
 
-    pub fn test_http(&self) -> &reqwest::Client {
-        &self.test_http
-    }
-
     pub fn proxy_http(&self) -> Option<&reqwest::Client> {
         self.proxy_http.as_ref()
     }
 
-    pub fn node(&self, name: &str) -> Option<&NodeConfig> {
-        self.config.nodes.iter().find(|node| node.name == name)
-    }
-
-    pub async fn test_lock(&self, node: &str) -> Arc<Mutex<()>> {
-        let mut locks = self.test_locks.lock().await;
-        locks
-            .entry(node.to_string())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
+    pub fn registry(&self) -> &Registry {
+        &self.registry
     }
 
     pub async fn begin_auto(&self, node: &str) -> bool {

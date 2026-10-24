@@ -21,15 +21,11 @@ const store = usePortalStore()
 onMounted(() => store.startAutoRefresh())
 onUnmounted(() => store.stopAutoRefresh())
 
-const updated = computed(() =>
-  store.lastUpdatedAt ? new Date(store.lastUpdatedAt).toLocaleTimeString() : 'waiting',
-)
-
 const menuOptions: MenuOption[] = [
   { label: 'Overview', key: '/' },
-  { label: 'Proxies', key: '/proxies' },
-  { label: 'Subscriptions', key: '/subscriptions' },
   { label: 'Machines', key: '/machines' },
+  { label: 'Subscriptions', key: '/subscriptions' },
+  { label: 'Proxies', key: '/proxies' },
   { label: 'Settings', key: '/settings' },
 ]
 
@@ -44,10 +40,6 @@ const activeKey = computed(() => route.path)
           <n-layout-sider bordered :width="200" content-style="padding: 16px 8px">
             <div class="brand">sing-portal</div>
             <n-menu :options="menuOptions" :value="activeKey" @update:value="router.push" />
-            <div class="refresh-status">
-              {{ store.live ? 'live updates' : 'reconnecting…' }}<br />
-              updated {{ updated }}
-            </div>
           </n-layout-sider>
           <n-layout-content content-style="padding: 24px; height: 100vh; overflow: auto">
             <router-view />
@@ -63,14 +55,5 @@ const activeKey = computed(() => route.path)
   font-weight: 600;
   font-size: 16px;
   padding: 8px 12px 16px;
-}
-
-
-.refresh-status {
-  margin-top: 24px;
-  padding: 0 12px;
-  font-size: 12px;
-  line-height: 1.6;
-  opacity: 0.55;
 }
 </style>

@@ -12,6 +12,8 @@ use crate::error::ApiResult;
 use crate::service;
 use crate::state::AppState;
 
+// Machines have independent agents and test selectors; evaluate a few at once.
+const MACHINE_CONCURRENCY: usize = 4;
 const RECOVERY_CANDIDATES: usize = 5;
 const RECOVERY_COOLDOWN_SECS: i64 = 60;
 
@@ -58,22 +60,31 @@ pub async fn run(state: AppState) {
 }
 
 pub async fn run_once(state: &AppState) -> ApiResult<Vec<Evaluation>> {
-    let mut evaluations = Vec::new();
+    let machines = service::known_machines(state).await?;
+    let evaluations = futures_util::stream::iter(machines.into_iter().map(|machine| {
+        let state = state.clone();
+        async move {
+            if !state.registry().is_connected(&machine).await {
+                return None;
+            }
+            if !state.begin_auto(&machine).await {
+                return None;
+            }
 
-    for machine in service::known_machines(state).await? {
-        if !state.registry().is_connected(&machine).await {
-            continue;
+            match evaluate_locked(&state, &machine, None).await {
+                Ok(Some(evaluation)) => Some(evaluation),
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(machine = %machine, %error, "auto selection failed");
+                    None
+                }
+            }
         }
-        if !state.begin_auto(&machine).await {
-            continue;
-        }
-
-        match evaluate_locked(state, &machine, None).await {
-            Ok(Some(evaluation)) => evaluations.push(evaluation),
-            Ok(None) => {}
-            Err(error) => tracing::warn!(machine = %machine, %error, "auto selection failed"),
-        }
-    }
+    }))
+    .buffer_unordered(MACHINE_CONCURRENCY)
+    .filter_map(std::future::ready)
+    .collect::<Vec<_>>()
+    .await;
 
     Ok(evaluations)
 }

@@ -53,7 +53,7 @@ pub struct TesterConfig {
 impl Default for TesterConfig {
     fn default() -> Self {
         Self {
-            timeout: Duration::from_secs(20),
+            timeout: Duration::from_secs(10),
             inbound: SocketAddr::from(([127, 0, 0, 1], 7899)),
             egress_inbound: SocketAddr::from(([127, 0, 0, 1], 7900)),
             health_inbound: SocketAddr::from(([127, 0, 0, 1], 7901)),
@@ -255,11 +255,19 @@ impl Tester {
 
         let started = Instant::now();
         let deadline = started + self.config.timeout;
-        let mut response = client
-            .get(&self.config.download_url)
-            .send()
-            .await
-            .map_err(|error| AgentError::Measure(format!("download failed: {error}")))?;
+        let request = client.get(&self.config.download_url).send();
+        let mut response =
+            match tokio::time::timeout(deadline.saturating_duration_since(Instant::now()), request)
+                .await
+            {
+                Ok(Ok(response)) => response,
+                Ok(Err(error)) => {
+                    return Err(AgentError::Measure(format!("download failed: {error}")));
+                }
+                Err(_) => {
+                    return Err(AgentError::Measure("download timed out".into()));
+                }
+            };
         if !response.status().is_success() {
             return Err(AgentError::Measure(format!(
                 "download failed: http {}",
@@ -269,6 +277,8 @@ impl Tester {
 
         let mut first_byte: Option<Instant> = None;
         let mut bytes = 0u64;
+        // Keep bytes received before a timeout or body error; bytes > 0 still
+        // yields a rate instead of throwing the whole measurement away.
         loop {
             if bytes >= self.config.max_bytes {
                 break;

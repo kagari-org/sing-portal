@@ -3,7 +3,8 @@ mod common;
 use std::io::{Read, Write};
 use std::net::TcpListener as StdListener;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use sing_portal_agent::api::BoxApi;
 use sing_portal_agent::tester::{Kind, Tester, TesterConfig};
@@ -28,6 +29,35 @@ fn serve(size: usize, initial: usize, stall: Duration) -> u16 {
                 let _ = stream.flush();
                 std::thread::sleep(stall);
                 let _ = stream.write_all(&body[initial.min(body.len())..]);
+                let _ = stream.flush();
+            });
+        }
+    });
+    port
+}
+
+fn serve_stall_first_headers(size: usize, stall: Duration) -> u16 {
+    let listener = StdListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let body = Arc::new(vec![7u8; size]);
+    let first = Arc::new(AtomicBool::new(true));
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let body = body.clone();
+            let is_first = first.swap(false, Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                if is_first {
+                    std::thread::sleep(stall);
+                }
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
                 let _ = stream.flush();
             });
         }
@@ -164,6 +194,50 @@ async fn uses_partial_download_on_timeout() {
     let measurement = tester.measure("d1", Kind::Bandwidth).await.unwrap();
     let down = measurement.down_mbps.unwrap();
     assert!(down > 0.0);
+    drop(child);
+}
+
+#[tokio::test]
+async fn download_timeout_releases_the_selector_lock() {
+    if common::sing_box().is_none() {
+        eprintln!("SING_BOX_BIN is not set, skipping");
+        return;
+    }
+    // The first request never sends headers until after the probe deadline.
+    let http_port = serve_stall_first_headers(4 * 1024 * 1024, Duration::from_secs(2));
+    let ports = common::free_ports(4);
+    let api_port = ports[0];
+    let inbound_port = ports[1];
+    let egress_port = ports[2];
+    let health_port = ports[3];
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let (child, _config_dir, _state_dir) = common::start(
+        dir.path(),
+        api_port,
+        &test_config(api_port, inbound_port, egress_port, health_port),
+    )
+    .await;
+    let tester = tester(
+        api_port,
+        inbound_port,
+        egress_port,
+        health_port,
+        http_port,
+        Duration::from_millis(300),
+    )
+    .await;
+
+    let started = Instant::now();
+    let first = tester.measure("d1", Kind::Bandwidth).await;
+    assert!(first.is_err(), "a stalled response must time out");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the download timeout must be bounded"
+    );
+
+    let second = tester.measure("d1", Kind::Bandwidth).await.unwrap();
+    assert!(second.down_mbps.unwrap() > 0.0);
     drop(child);
 }
 

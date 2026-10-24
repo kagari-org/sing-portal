@@ -121,7 +121,7 @@ struct AgentArgs {
     #[arg(long = "best-effort")]
     best_effort: bool,
 
-    #[arg(long, env = "SING_PORTAL_TEST_TIMEOUT", default_value = "20s")]
+    #[arg(long, env = "SING_PORTAL_TEST_TIMEOUT", default_value = "10s")]
     test_timeout: String,
 
     #[arg(

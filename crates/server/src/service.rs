@@ -250,7 +250,7 @@ pub async fn probe(
         tag: tag.to_string(),
     };
     let timeout = match kind {
-        "bandwidth" | "both" => Duration::from_secs(90),
+        "bandwidth" | "both" => Duration::from_secs(30),
         "egress" => Duration::from_secs(20),
         _ => Duration::from_secs(15),
     };

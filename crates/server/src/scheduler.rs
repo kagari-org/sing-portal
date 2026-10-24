@@ -56,6 +56,7 @@ pub async fn run_once(state: &AppState) -> ApiResult<usize> {
         }
 
         service::broadcast_state(state).await;
+        state.notify_changed(&["subscriptions", "providers", "revision", "nodes", "audit"]);
 
         let state = state.clone();
         tokio::spawn(async move {

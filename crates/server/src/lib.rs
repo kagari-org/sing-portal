@@ -1,6 +1,7 @@
 pub mod auto;
 pub mod config;
 pub mod error;
+pub mod evaluation;
 pub mod fetch;
 pub mod handlers;
 pub mod registry;
@@ -21,13 +22,14 @@ use axum::routing::{get, patch, post, put};
 use serde_json::json;
 use tower_http::trace::TraceLayer;
 
-use crate::handlers::{agent_ws, api, assets, nodes, providers, subscriptions};
+use crate::handlers::{agent_ws, api, assets, events, nodes, providers, subscriptions};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/healthz", get(api::healthz))
         .route("/api/revision", get(api::revision))
         .route("/api/audit", get(api::audit))
+        .route("/api/events", get(events::stream))
         .route("/api/export", get(api::export))
         .route("/api/import", post(api::import))
         .route(
@@ -44,14 +46,13 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/providers", get(providers::list))
         .route("/api/nodes", get(nodes::list))
+        .route("/api/nodes/enabled", put(nodes::set_enabled))
         .route("/api/nodes/{name}/selection", put(nodes::set_selection))
         .route("/api/nodes/{name}/test", post(nodes::test))
         .route("/api/nodes/{name}/auto", post(nodes::auto))
         .route("/api/nodes/{name}/mode", put(nodes::set_mode))
-        .route(
-            "/api/nodes/{name}/measurements",
-            get(nodes::measurements),
-        )
+        .route("/api/nodes/{name}/measurements", get(nodes::measurements))
+        .route("/api/nodes/{name}/evaluation", get(nodes::evaluation))
         .route("/api/v1/agent/ws", get(agent_ws::upgrade))
         .fallback(assets::handler)
         .layer(middleware::from_fn(write_guard))

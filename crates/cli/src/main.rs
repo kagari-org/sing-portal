@@ -133,10 +133,44 @@ struct AgentArgs {
 
     #[arg(
         long,
+        env = "SING_PORTAL_TEST_EGRESS_INBOUND",
+        default_value = "127.0.0.1:7900"
+    )]
+    test_egress_inbound: std::net::SocketAddr,
+
+    #[arg(
+        long,
+        env = "SING_PORTAL_TEST_HEALTH_INBOUND",
+        default_value = "127.0.0.1:7901"
+    )]
+    test_health_inbound: std::net::SocketAddr,
+
+    #[arg(
+        long,
+        env = "SING_PORTAL_EGRESS_HEALTH_INTERVAL",
+        default_value = "30s"
+    )]
+    egress_health_interval: String,
+
+    #[arg(long, env = "SING_PORTAL_EGRESS_HEALTH_FAILURES", default_value_t = 2)]
+    egress_health_failures: u32,
+
+    #[arg(
+        long,
         env = "SING_PORTAL_TEST_DOWNLOAD_URL",
         default_value = "https://speed.cloudflare.com/__down?bytes=26214400"
     )]
     test_download_url: String,
+
+    #[arg(
+        long,
+        env = "SING_PORTAL_TEST_CHECK_URL",
+        default_value = "https://www.cloudflare.com/cdn-cgi/trace"
+    )]
+    test_check_url: String,
+
+    #[arg(long, env = "SING_PORTAL_TEST_CHECK_TIMEOUT", default_value = "8s")]
+    test_check_timeout: String,
 
     #[arg(
         long,
@@ -221,10 +255,17 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         once: args.once,
         best_effort: args.best_effort,
         health_timeout: parse_duration(&args.health_timeout).map_err(anyhow::Error::msg)?,
+        egress_health_interval: parse_duration(&args.egress_health_interval)
+            .map_err(anyhow::Error::msg)?,
+        egress_health_failures: args.egress_health_failures,
         tester: sing_portal_agent::tester::TesterConfig {
             timeout: parse_duration(&args.test_timeout).map_err(anyhow::Error::msg)?,
             inbound: args.test_inbound,
+            egress_inbound: args.test_egress_inbound,
+            health_inbound: args.test_health_inbound,
             download_url: args.test_download_url,
+            check_url: args.test_check_url,
+            check_timeout: parse_duration(&args.test_check_timeout).map_err(anyhow::Error::msg)?,
             max_bytes: args.test_max_bytes,
         },
     };

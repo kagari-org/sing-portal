@@ -39,7 +39,9 @@ async fn next_message(socket: &mut WebSocketStream<TcpStream>) -> AgentMessage {
 
 async fn send<M: serde::Serialize>(socket: &mut WebSocketStream<TcpStream>, message: &M) {
     socket
-        .send(Message::Text(serde_json::to_string(message).unwrap().into()))
+        .send(Message::Text(
+            serde_json::to_string(message).unwrap().into(),
+        ))
         .await
         .unwrap();
 }
@@ -52,8 +54,12 @@ async fn syncs_state_over_websocket() {
     }
 
     let dir = TempDir::new().unwrap();
-    let api_port = common::free_port();
     let endpoint = common::local_endpoint().await;
+    let ports = common::free_ports(4);
+    let api_port = ports[0];
+    let test_inbound = ports[1];
+    let egress_inbound = ports[2];
+    let health_inbound = ports[3];
     let test_url = format!("http://127.0.0.1:{endpoint}/");
 
     let template: Value = serde_json::from_str(TEMPLATE).unwrap();
@@ -67,15 +73,11 @@ async fn syncs_state_over_websocket() {
     let template_path = dir.path().join("template.json");
     std::fs::write(&template_path, serde_json::to_vec(&template).unwrap()).unwrap();
 
-    let run = common::start(
-        dir.path(),
-        api_port,
-        &{
-            let mut initial = render(&template, &[], &test_url).unwrap();
-            initial["log"] = json!({ "level": "warn" });
-            initial
-        },
-    )
+    let run = common::start(dir.path(), api_port, &{
+        let mut initial = render(&template, &[], &test_url).unwrap();
+        initial["log"] = json!({ "level": "warn" });
+        initial
+    })
     .await;
     let (mut box_child, config_dir, state_dir) = run;
     let pid = box_child.id().unwrap();
@@ -94,8 +96,12 @@ async fn syncs_state_over_websocket() {
         once: true,
         best_effort: false,
         health_timeout: Duration::from_secs(5),
+        egress_health_interval: Duration::ZERO,
+        egress_health_failures: 2,
         tester: sing_portal_agent::tester::TesterConfig {
-            inbound: std::net::SocketAddr::from(([127, 0, 0, 1], common::free_port())),
+            inbound: std::net::SocketAddr::from(([127, 0, 0, 1], test_inbound)),
+            egress_inbound: std::net::SocketAddr::from(([127, 0, 0, 1], egress_inbound)),
+            health_inbound: std::net::SocketAddr::from(([127, 0, 0, 1], health_inbound)),
             ..sing_portal_agent::tester::TesterConfig::default()
         },
     };
@@ -150,7 +156,10 @@ async fn syncs_state_over_websocket() {
             std::fs::read_to_string(dir.path().join("sing-box.log")).unwrap_or_default()
         );
     }
-    assert_eq!(revision, "sha256:new", "health={health} applied={applied} error={error}");
+    assert_eq!(
+        revision, "sha256:new",
+        "health={health} applied={applied} error={error}"
+    );
     assert_eq!(selection, "node-a");
     assert_eq!(health, "ok");
     assert!(applied);
@@ -160,11 +169,7 @@ async fn syncs_state_over_websocket() {
         serde_json::from_slice(&std::fs::read(&config.config_path).unwrap()).unwrap();
     assert_eq!(written["outbounds"][0]["tag"], "s_out");
 
-    let api = sing_portal_agent::api::BoxApi::new(
-        &config.api_url,
-        Duration::from_secs(5),
-    )
-    .unwrap();
+    let api = sing_portal_agent::api::BoxApi::new(&config.api_url, Duration::from_secs(5)).unwrap();
     assert_eq!(api.current_selection().await.unwrap(), "node-a");
 
     let _ = tokio::time::timeout(Duration::from_secs(2), box_child.kill()).await;
@@ -209,8 +214,12 @@ async fn minimal_config() -> AgentConfig {
         once: true,
         best_effort: false,
         health_timeout: Duration::from_millis(500),
+        egress_health_interval: Duration::ZERO,
+        egress_health_failures: 2,
         tester: sing_portal_agent::tester::TesterConfig {
             inbound: std::net::SocketAddr::from(([127, 0, 0, 1], common::free_port())),
+            egress_inbound: std::net::SocketAddr::from(([127, 0, 0, 1], common::free_port())),
+            health_inbound: std::net::SocketAddr::from(([127, 0, 0, 1], common::free_port())),
             ..sing_portal_agent::tester::TesterConfig::default()
         },
     };

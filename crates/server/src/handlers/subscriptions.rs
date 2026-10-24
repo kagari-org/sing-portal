@@ -100,6 +100,7 @@ pub async fn create(
         .await?;
     service::reconcile_selections(&state).await?;
     service::broadcast_state(&state).await;
+    state.notify_changed(&["subscriptions", "providers", "revision", "nodes", "audit"]);
 
     Ok((
         StatusCode::CREATED,
@@ -133,11 +134,14 @@ pub async fn patch(
         .ok_or_else(|| ApiError::NotFound("subscription not found".into()))?;
 
     let interval_secs = match &request.refresh_interval {
-        Some(value) => Some(parse_duration(value).map_err(ApiError::BadRequest)?.as_secs() as i64),
+        Some(value) => Some(
+            parse_duration(value)
+                .map_err(ApiError::BadRequest)?
+                .as_secs() as i64,
+        ),
         None => None,
     };
-    let next_refresh_at =
-        interval_secs.map(|secs| sing_portal_store::now().saturating_add(secs));
+    let next_refresh_at = interval_secs.map(|secs| sing_portal_store::now().saturating_add(secs));
 
     let url_changed = match (&request.url, &current.url) {
         (Some(url), Some(existing)) => url != existing,
@@ -185,6 +189,7 @@ pub async fn patch(
         .await?;
     service::reconcile_selections(&state).await?;
     service::broadcast_state(&state).await;
+    state.notify_changed(&["subscriptions", "providers", "revision", "nodes", "audit"]);
 
     Ok(Json(MutationView {
         subscription: SubscriptionView::from(&updated),
@@ -209,6 +214,7 @@ pub async fn delete(
         .await?;
     service::reconcile_selections(&state).await?;
     service::broadcast_state(&state).await;
+    state.notify_changed(&["subscriptions", "providers", "revision", "nodes", "audit"]);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -239,10 +245,10 @@ pub async fn refresh(
         .await?;
     service::reconcile_selections(&state).await?;
     service::broadcast_state(&state).await;
+    state.notify_changed(&["subscriptions", "providers", "revision", "nodes", "audit"]);
 
     Ok(Json(MutationView {
         subscription: SubscriptionView::from(&updated),
         warnings,
     }))
 }
-

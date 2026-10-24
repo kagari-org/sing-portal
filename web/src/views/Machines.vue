@@ -94,6 +94,29 @@ const columns = computed<DataTableColumns<Machine>>(() => [
       }),
   },
   {
+    title: 'Evaluation',
+    key: 'evaluation',
+    width: 220,
+    render: (row) => {
+      const evaluation = row.evaluation
+      if (!evaluation) return h(NText, { depth: 3 }, { default: () => '—' })
+      if (evaluation.running) {
+        return h(NText, { depth: 2 }, {
+          default: () => `${evaluation.phase} ${evaluation.done}/${evaluation.total}`,
+        })
+      }
+      if (evaluation.error) {
+        return h(NText, { type: 'warning' }, { default: () => evaluation.error })
+      }
+      return h(NText, { depth: 3 }, {
+        default: () =>
+          evaluation.best
+            ? `${evaluation.best} (${formatScore(evaluation.score)})`
+            : 'no usable candidate',
+      })
+    },
+  },
+  {
     title: 'Latency',
     key: 'latency',
     width: 100,
@@ -132,8 +155,11 @@ const columns = computed<DataTableColumns<Machine>>(() => [
             NButton,
             {
               size: 'small',
-              disabled: row.mode !== 'auto' || busy.value === `auto:${row.name}`,
-              loading: busy.value === `auto:${row.name}`,
+              disabled:
+                row.mode !== 'auto' ||
+                row.evaluation?.running === true ||
+                busy.value === `auto:${row.name}`,
+              loading: row.evaluation?.running === true || busy.value === `auto:${row.name}`,
               onClick: () => evaluate(row),
             },
             { default: () => 'Evaluate' },
@@ -165,7 +191,7 @@ async function setMode(machine: Machine, auto: boolean) {
   try {
     await api.setMode(machine.name, auto ? 'auto' : 'manual')
     message.success(`${machine.name}: ${auto ? 'auto' : 'manual'} selection`)
-    setTimeout(() => store.loadMachines().catch(() => undefined), auto ? 1500 : 0)
+    await store.refreshSilently()
   } catch (error) {
     message.error((error as Error).message)
   }
@@ -176,7 +202,9 @@ async function evaluate(machine: Machine) {
   try {
     const result = await api.runAuto(machine.name)
     message.info(`evaluation ${result.status}`)
-    setTimeout(() => store.loadMachines().catch(() => undefined), 2000)
+    const state = await api.getEvaluation(machine.name)
+    if (state) store.setEvaluation(state)
+    await store.loadMachines()
   } catch (error) {
     message.error((error as Error).message)
   } finally {
@@ -189,7 +217,7 @@ async function choose(machine: Machine, value: string) {
   if (!value || !current || current.mode === 'auto' || value === current.selection) return
   try {
     const result = await api.setSelection(machine.name, value)
-    await store.loadMachines()
+    await store.refreshSilently()
     if (result.applied) {
       message.success(`${machine.name} switched to ${result.selection}`)
     } else {

@@ -44,7 +44,10 @@ const activeKey = computed(() => route.path)
           <n-layout-sider bordered :width="200" content-style="padding: 16px 8px">
             <div class="brand">sing-portal</div>
             <n-menu :options="menuOptions" :value="activeKey" @update:value="router.push" />
-            <div class="refresh-status">auto refresh 5s<br />updated {{ updated }}</div>
+            <div class="refresh-status">
+              {{ store.live ? 'live updates' : 'reconnecting…' }}<br />
+              updated {{ updated }}
+            </div>
           </n-layout-sider>
           <n-layout-content content-style="padding: 24px; height: 100vh; overflow: auto">
             <router-view />

@@ -137,14 +137,16 @@ curl -fsS "$portal/api/providers" | node -e 'let s="";process.stdin.on("data",d=
 echo
 echo "== auto selection: agent probes every node, portal scores and picks"
 curl -fsS -X POST -H 'X-Portal-Request: 1' "$portal/api/nodes/home/auto" >/dev/null
-for _ in $(seq 1 300); do
+for _ in $(seq 1 600); do
   count="$(curl -fsS "$portal/api/nodes/home/measurements" |
-    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).length))')"
-  if [ "$count" -gt 0 ]; then break; fi
+    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).auto.length))')"
+  running="$(curl -fsS "$portal/api/nodes/home/evaluation" |
+    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(s);console.log(v&&v.running?"yes":"no")})')"
+  if [ "$count" -gt 0 ] && [ "$running" = "no" ]; then break; fi
   sleep 0.2
 done
 curl -fsS "$portal/api/nodes/home/measurements" |
-  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const row of JSON.parse(s).slice(0,5)){console.log((row.best?"* ":"  ")+row.tag.padEnd(12)+" score="+row.score.toFixed(1)+" lat="+(row.latencyMs===null?"n/a":row.latencyMs.toFixed(1))+"ms bw="+(row.downMbps===null?"n/a":row.downMbps.toFixed(1)+"Mbps"))}})'
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const row of JSON.parse(s).auto.slice(0,5)){console.log((row.best?"* ":"  ")+row.tag.padEnd(12)+" score="+row.score.toFixed(1)+" lat="+(row.latencyMs===null?"n/a":row.latencyMs.toFixed(1))+"ms bw="+(row.downMbps===null?"n/a":row.downMbps.toFixed(1)+"Mbps"))};for(const row of JSON.parse(s).manual){console.log("manual "+row.tag.padEnd(12)+" lat="+(row.latencyMs===null?"n/a":row.latencyMs.toFixed(1))+"ms bw="+(row.downMbps===null?"n/a":row.downMbps.toFixed(1)+"Mbps"))}})'
 curl -fsS "$portal/api/nodes" |
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const n=JSON.parse(s)[0];console.log({mode:n.mode,selection:n.selection,score:n.score===null?null:Number(n.score.toFixed(1)),best:n.best})})'
 

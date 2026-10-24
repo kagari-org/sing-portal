@@ -1,6 +1,11 @@
+use std::collections::HashSet;
+
 use sqlx::Row;
 
-use crate::{Measurement, NodeReport, Result, Selection, SelectionMode, Store, StoreError, now};
+use crate::{
+    ManualMeasurement, Measurement, NodeReport, Result, Selection, SelectionMode, Store,
+    StoreError, now,
+};
 
 impl Store {
     pub async fn selections(&self) -> Result<Vec<Selection>> {
@@ -14,12 +19,12 @@ impl Store {
     }
 
     pub async fn selection(&self, node_name: &str) -> Result<Option<String>> {
-        Ok(sqlx::query_scalar::<_, String>(
-            "SELECT outbound FROM selections WHERE node_name = ?",
+        Ok(
+            sqlx::query_scalar::<_, String>("SELECT outbound FROM selections WHERE node_name = ?")
+                .bind(node_name)
+                .fetch_optional(self.pool())
+                .await?,
         )
-        .bind(node_name)
-        .fetch_optional(self.pool())
-        .await?)
     }
 
     pub async fn selection_with_mode(&self, node_name: &str) -> Result<Option<Selection>> {
@@ -153,6 +158,72 @@ impl Store {
 
         rows.iter().map(measurement_from_row).collect()
     }
+
+    /// Manual measurements survive automatic evaluations; a latency-only test
+    /// keeps the previous bandwidth (and the other way around).
+    pub async fn record_manual_measurement(
+        &self,
+        node_name: &str,
+        tag: &str,
+        latency_ms: Option<f64>,
+        down_mbps: Option<f64>,
+        measured_at: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO manual_measurements (node_name, tag, latency_ms, down_mbps, measured_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(node_name, tag) DO UPDATE SET
+                latency_ms = COALESCE(excluded.latency_ms, manual_measurements.latency_ms),
+                down_mbps = COALESCE(excluded.down_mbps, manual_measurements.down_mbps),
+                measured_at = excluded.measured_at",
+        )
+        .bind(node_name)
+        .bind(tag)
+        .bind(latency_ms)
+        .bind(down_mbps)
+        .bind(measured_at)
+        .execute(self.pool())
+        .await?;
+        Ok(())
+    }
+
+    pub async fn manual_measurements(&self, node_name: &str) -> Result<Vec<ManualMeasurement>> {
+        let rows = sqlx::query(
+            "SELECT node_name, tag, latency_ms, down_mbps, measured_at FROM manual_measurements
+             WHERE node_name = ? ORDER BY measured_at DESC, tag ASC",
+        )
+        .bind(node_name)
+        .fetch_all(self.pool())
+        .await?;
+
+        rows.iter().map(manual_measurement_from_row).collect()
+    }
+
+    pub async fn disabled_tags(&self) -> Result<HashSet<String>> {
+        let tags = sqlx::query_scalar::<_, String>("SELECT tag FROM disabled_nodes")
+            .fetch_all(self.pool())
+            .await?;
+        Ok(tags.into_iter().collect())
+    }
+
+    pub async fn set_node_disabled(&self, tag: &str, disabled: bool) -> Result<()> {
+        if disabled {
+            sqlx::query(
+                "INSERT INTO disabled_nodes (tag, disabled_at) VALUES (?, ?)
+                 ON CONFLICT(tag) DO UPDATE SET disabled_at = excluded.disabled_at",
+            )
+            .bind(tag)
+            .bind(now())
+            .execute(self.pool())
+            .await?;
+        } else {
+            sqlx::query("DELETE FROM disabled_nodes WHERE tag = ?")
+                .bind(tag)
+                .execute(self.pool())
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 fn selection_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Selection> {
@@ -165,6 +236,16 @@ fn selection_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Selection> {
         outbound: row.try_get("outbound")?,
         mode,
         updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn manual_measurement_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<ManualMeasurement> {
+    Ok(ManualMeasurement {
+        node_name: row.try_get("node_name")?,
+        tag: row.try_get("tag")?,
+        latency_ms: row.try_get("latency_ms")?,
+        down_mbps: row.try_get("down_mbps")?,
+        measured_at: row.try_get("measured_at")?,
     })
 }
 

@@ -5,32 +5,46 @@ pub mod error;
 pub mod state;
 pub mod tester;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use sing_portal_core::protocol::{AgentMessage, ServerMessage};
 use sing_portal_core::render::SELECTOR_TAG;
+use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
+use api::BoxApi;
 pub use config::AgentConfig;
 pub use error::{AgentError, Result};
-use api::BoxApi;
 
-const RENDERER_VERSION: u32 = 2;
+const RENDERER_VERSION: u32 = 5;
 use tester::{Kind, Tester};
+
+#[derive(Default)]
+struct EgressHealth {
+    failures: u32,
+    error: String,
+}
 
 pub struct Agent {
     config: AgentConfig,
     api: BoxApi,
     tester: Tester,
+    egress_health: Arc<Mutex<EgressHealth>>,
 }
 
 impl Agent {
     pub fn new(config: AgentConfig) -> Result<Self> {
         let api = BoxApi::new(&config.api_url, Duration::from_secs(5))?;
         let tester = Tester::new(config.tester.clone(), api.clone());
-        Ok(Self { config, api, tester })
+        Ok(Self {
+            config,
+            api,
+            tester,
+            egress_health: Arc::new(Mutex::new(EgressHealth::default())),
+        })
     }
 
     pub fn config(&self) -> &AgentConfig {
@@ -103,6 +117,31 @@ impl Agent {
         send_message(&sender, &hello).await?;
         tracing::info!(portal = %url, "agent connected");
 
+        let health_enabled = !self.config.egress_health_interval.is_zero();
+        let (health_tx, mut health_rx) = tokio::sync::mpsc::channel::<Result<f64, String>>(4);
+        if health_enabled {
+            let tester = self.tester.clone();
+            let interval = self
+                .config
+                .egress_health_interval
+                .max(Duration::from_secs(5));
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                ticker.tick().await;
+                loop {
+                    ticker.tick().await;
+                    let result = tester
+                        .health_check()
+                        .await
+                        .map_err(|error| error.to_string());
+                    if health_tx.send(result).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
         let mut ticker = tokio::time::interval(self.config.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await;
@@ -130,6 +169,26 @@ impl Agent {
                     }
                 }
                 _ = ticker.tick() => {
+                    let status = self.status().await;
+                    send_message(&sender, &status).await?;
+                }
+                result = health_rx.recv(), if health_enabled => {
+                    let Some(result) = result else {
+                        break Ok(());
+                    };
+                    {
+                        let mut health = self.egress_health.lock().await;
+                        match result {
+                            Ok(_) => {
+                                health.failures = 0;
+                                health.error.clear();
+                            }
+                            Err(error) => {
+                                health.failures = health.failures.saturating_add(1);
+                                health.error = error;
+                            }
+                        }
+                    }
                     let status = self.status().await;
                     send_message(&sender, &status).await?;
                 }
@@ -262,17 +321,29 @@ impl Agent {
             .current_selection()
             .await
             .unwrap_or_else(|_| local.applied_selection.clone());
-        let health = if local.last_error.is_empty() {
-            "ok"
+
+        let egress = self.egress_health.lock().await;
+        let threshold = self.config.egress_health_failures.max(1);
+        let (health, error) = if egress.failures >= threshold {
+            (
+                "egress_degraded".to_string(),
+                format!(
+                    "real egress check failed {} consecutive time(s): {}",
+                    egress.failures, egress.error
+                ),
+            )
+        } else if local.last_error.is_empty() {
+            ("ok".to_string(), String::new())
         } else {
-            "degraded"
+            ("degraded".to_string(), local.last_error.clone())
         };
+        drop(egress);
 
         AgentMessage::Status {
             revision: local.applied_revision,
             selection,
-            health: health.to_string(),
-            error: local.last_error,
+            health,
+            error,
         }
     }
 }
@@ -281,7 +352,10 @@ fn serialize(message: &AgentMessage) -> Result<String> {
     Ok(serde_json::to_string(message)?)
 }
 
-async fn send_message(sender: &tokio::sync::mpsc::Sender<Message>, message: &AgentMessage) -> Result<()> {
+async fn send_message(
+    sender: &tokio::sync::mpsc::Sender<Message>,
+    message: &AgentMessage,
+) -> Result<()> {
     sender
         .send(Message::Text(serialize(message)?.into()))
         .await

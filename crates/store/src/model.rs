@@ -130,6 +130,15 @@ pub struct Measurement {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManualMeasurement {
+    pub node_name: String,
+    pub tag: String,
+    pub latency_ms: Option<f64>,
+    pub down_mbps: Option<f64>,
+    pub measured_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeReport {
     pub node_name: String,
     pub revision: String,
@@ -155,4 +164,6 @@ pub struct Snapshot {
     pub exported_at: i64,
     pub subscriptions: Vec<Subscription>,
     pub selections: Vec<Selection>,
+    #[serde(default)]
+    pub disabled_nodes: Vec<String>,
 }

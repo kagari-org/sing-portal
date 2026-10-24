@@ -89,7 +89,10 @@ async fn subscriptions_roundtrip() {
     assert_eq!(refreshed.last_fetched_at, Some(500));
     assert_eq!(refreshed.next_refresh_at, Some(900));
 
-    store.set_refresh_error("id1", "boom", Some(1000)).await.unwrap();
+    store
+        .set_refresh_error("id1", "boom", Some(1000))
+        .await
+        .unwrap();
     let after_error = store.get_subscription("id1").await.unwrap().unwrap();
     assert_eq!(after_error.last_error, "boom");
     assert_eq!(after_error.outbound_tags(), vec!["b".to_string()]);
@@ -146,18 +149,36 @@ async fn selections_and_reports() {
     assert_eq!(store.selections().await.unwrap().len(), 2);
 
     assert_eq!(
-        store.selection_with_mode("cola").await.unwrap().unwrap().mode,
+        store
+            .selection_with_mode("cola")
+            .await
+            .unwrap()
+            .unwrap()
+            .mode,
         SelectionMode::Auto
     );
     store.set_selection("cola", "node-2").await.unwrap();
     assert_eq!(
-        store.selection_with_mode("cola").await.unwrap().unwrap().mode,
+        store
+            .selection_with_mode("cola")
+            .await
+            .unwrap()
+            .unwrap()
+            .mode,
         SelectionMode::Auto,
         "applying a selection keeps the mode"
     );
-    store.set_selection_mode("cola", SelectionMode::Manual).await.unwrap();
+    store
+        .set_selection_mode("cola", SelectionMode::Manual)
+        .await
+        .unwrap();
     assert_eq!(
-        store.selection_with_mode("cola").await.unwrap().unwrap().mode,
+        store
+            .selection_with_mode("cola")
+            .await
+            .unwrap()
+            .unwrap()
+            .mode,
         SelectionMode::Manual
     );
 
@@ -179,7 +200,10 @@ async fn selections_and_reports() {
             measured_at: 10,
         },
     ];
-    store.replace_measurements("cola", &measurements).await.unwrap();
+    store
+        .replace_measurements("cola", &measurements)
+        .await
+        .unwrap();
     let stored = store.measurements("cola").await.unwrap();
     assert_eq!(stored.len(), 2);
     assert_eq!(stored[0].tag, "a");
@@ -260,4 +284,65 @@ async fn snapshot_roundtrip() {
         .await
         .expect("import is idempotent");
     assert_eq!(other.list_subscriptions().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn manual_measurements_are_separate_and_merge_fields() {
+    let (_dir, store) = new_store().await;
+    store
+        .replace_measurements(
+            "home",
+            &[Measurement {
+                node_name: "home".into(),
+                tag: "a".into(),
+                latency_ms: Some(30.0),
+                down_mbps: Some(5.0),
+                score: 89.1,
+                measured_at: 10,
+            }],
+        )
+        .await
+        .unwrap();
+
+    store
+        .record_manual_measurement("home", "a", Some(20.0), None, 100)
+        .await
+        .unwrap();
+    store
+        .record_manual_measurement("home", "a", None, Some(50.0), 200)
+        .await
+        .unwrap();
+
+    let manual = store.manual_measurements("home").await.unwrap();
+    assert_eq!(manual.len(), 1);
+    assert_eq!(manual[0].latency_ms, Some(20.0));
+    assert_eq!(manual[0].down_mbps, Some(50.0));
+    assert_eq!(manual[0].measured_at, 200);
+
+    let automatic = store.measurements("home").await.unwrap();
+    assert_eq!(automatic.len(), 1);
+    assert_eq!(automatic[0].latency_ms, Some(30.0));
+    assert_eq!(automatic[0].down_mbps, Some(5.0));
+}
+
+#[tokio::test]
+async fn disabled_nodes_survive_snapshot() {
+    let (_dir, store) = new_store().await;
+    store
+        .create_subscription(&new_subscription("a", "alpha", "x"))
+        .await
+        .unwrap();
+
+    store.set_node_disabled("alpha · x", true).await.unwrap();
+    assert!(store.disabled_tags().await.unwrap().contains("alpha · x"));
+
+    let snapshot = store.snapshot().await.unwrap();
+    assert_eq!(snapshot.disabled_nodes, vec!["alpha · x".to_string()]);
+
+    let (_dir2, other) = new_store().await;
+    other.import_snapshot(&snapshot).await.unwrap();
+    assert!(other.disabled_tags().await.unwrap().contains("alpha · x"));
+
+    other.set_node_disabled("alpha · x", false).await.unwrap();
+    assert!(other.disabled_tags().await.unwrap().is_empty());
 }

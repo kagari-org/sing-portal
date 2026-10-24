@@ -11,8 +11,8 @@ pub mod nodes;
 pub mod subscriptions;
 
 pub use model::{
-    AuditEntry, Measurement, NewSubscription, NodeReport, Selection, SelectionMode, Snapshot,
-    Source, Subscription, SubscriptionPatch,
+    AuditEntry, ManualMeasurement, Measurement, NewSubscription, NodeReport, Selection,
+    SelectionMode, Snapshot, Source, Subscription, SubscriptionPatch,
 };
 
 const SCHEMA: &str = include_str!("../../../migrations/0001_init.sql");

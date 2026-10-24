@@ -1,7 +1,8 @@
 use serde::Serialize;
-use sing_portal_store::{NodeReport, Subscription};
+use sing_portal_store::{ManualMeasurement, NodeReport, Subscription};
 
 use crate::config::mask_url;
+use crate::evaluation::EvaluationProgress;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +97,7 @@ pub struct NodeView {
     pub reachable: bool,
     pub version: Option<String>,
     pub report: Option<ReportView>,
+    pub evaluation: Option<EvaluationProgress>,
 }
 
 #[derive(Serialize)]
@@ -107,6 +109,33 @@ pub struct MeasurementView {
     pub score: f64,
     pub measured_at: i64,
     pub best: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualMeasurementView {
+    pub tag: String,
+    pub latency_ms: Option<f64>,
+    pub down_mbps: Option<f64>,
+    pub measured_at: i64,
+}
+
+impl From<&ManualMeasurement> for ManualMeasurementView {
+    fn from(measurement: &ManualMeasurement) -> Self {
+        Self {
+            tag: measurement.tag.clone(),
+            latency_ms: measurement.latency_ms,
+            down_mbps: measurement.down_mbps,
+            measured_at: measurement.measured_at,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasurementsView {
+    pub auto: Vec<MeasurementView>,
+    pub manual: Vec<ManualMeasurementView>,
 }
 
 #[derive(Serialize)]
@@ -140,6 +169,7 @@ pub struct ProviderNodeView {
     pub kind: String,
     pub server: String,
     pub server_port: Option<u64>,
+    pub enabled: bool,
 }
 
 #[derive(Serialize)]

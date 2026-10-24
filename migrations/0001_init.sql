@@ -51,6 +51,22 @@ CREATE TABLE IF NOT EXISTS measurements (
 
 CREATE INDEX IF NOT EXISTS idx_measurements_node ON measurements (node_name);
 
+CREATE TABLE IF NOT EXISTS manual_measurements (
+    node_name   TEXT NOT NULL,
+    tag         TEXT NOT NULL,
+    latency_ms  REAL,
+    down_mbps   REAL,
+    measured_at INTEGER NOT NULL,
+    PRIMARY KEY (node_name, tag)
+);
+
+CREATE INDEX IF NOT EXISTS idx_manual_measurements_node ON manual_measurements (node_name);
+
+CREATE TABLE IF NOT EXISTS disabled_nodes (
+    tag         TEXT PRIMARY KEY,
+    disabled_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
     at     INTEGER NOT NULL,

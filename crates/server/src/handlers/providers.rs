@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::Json;
 use axum::extract::State;
 use serde_json::Value;
@@ -8,6 +10,7 @@ use crate::state::AppState;
 
 pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<ProviderView>>> {
     let subscriptions = state.store().list_subscriptions().await?;
+    let disabled = state.store().disabled_tags().await?;
 
     let providers = subscriptions
         .iter()
@@ -22,7 +25,7 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<ProviderV
             nodes: subscription
                 .outbounds
                 .iter()
-                .map(provider_node)
+                .map(|outbound| provider_node(outbound, &disabled))
                 .collect(),
         })
         .collect();
@@ -30,13 +33,16 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<ProviderV
     Ok(Json(providers))
 }
 
-fn provider_node(outbound: &Value) -> ProviderNodeView {
+fn provider_node(outbound: &Value, disabled: &HashSet<String>) -> ProviderNodeView {
+    let tag = outbound
+        .get("tag")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
     ProviderNodeView {
-        tag: outbound
-            .get("tag")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
+        enabled: !disabled.contains(&tag),
+        tag,
         kind: outbound
             .get("type")
             .and_then(Value::as_str)

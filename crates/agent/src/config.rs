@@ -17,6 +17,8 @@ pub struct AgentConfig {
     pub once: bool,
     pub best_effort: bool,
     pub health_timeout: Duration,
+    pub egress_health_interval: Duration,
+    pub egress_health_failures: u32,
     pub tester: TesterConfig,
 }
 

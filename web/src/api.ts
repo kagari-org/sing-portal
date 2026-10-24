@@ -35,6 +35,23 @@ export interface Report {
   online: boolean
 }
 
+export interface EvaluationState {
+  machine: string
+  runId: number
+  running: boolean
+  phase: string
+  done: number
+  total: number
+  current: string | null
+  startedAt: number
+  finishedAt: number | null
+  best: string | null
+  score: number | null
+  switched: boolean
+  checked: number
+  error: string
+}
+
 export interface Machine {
   name: string
   address: string
@@ -47,6 +64,7 @@ export interface Machine {
   reachable: boolean
   version: string | null
   report: Report | null
+  evaluation: EvaluationState | null
 }
 
 export interface MeasurementRow {
@@ -58,11 +76,24 @@ export interface MeasurementRow {
   best: boolean
 }
 
+export interface ManualMeasurementRow {
+  tag: string
+  latencyMs: number | null
+  downMbps: number | null
+  measuredAt: number
+}
+
+export interface NodeMeasurements {
+  auto: MeasurementRow[]
+  manual: ManualMeasurementRow[]
+}
+
 export interface ProviderNode {
   tag: string
   kind: string
   server: string
   serverPort: number | null
+  enabled: boolean
 }
 
 export interface Provider {
@@ -113,6 +144,7 @@ export interface Snapshot {
   exportedAt: number
   subscriptions: Subscription[]
   selections: { nodeName: string; outbound: string; updatedAt: number }[]
+  disabledNodes: string[]
 }
 
 export interface SubscriptionInput {
@@ -176,7 +208,9 @@ export const api = {
   listProviders: () => request<Provider[]>('/api/providers'),
   listMachines: () => request<Machine[]>('/api/nodes'),
   listMeasurements: (machine: string) =>
-    request<MeasurementRow[]>(`/api/nodes/${machine}/measurements`),
+    request<NodeMeasurements>(`/api/nodes/${machine}/measurements`),
+  getEvaluation: (machine: string) =>
+    request<EvaluationState | null>(`/api/nodes/${machine}/evaluation`),
   setMode: (machine: string, mode: 'auto' | 'manual') =>
     request<{ mode: string }>(`/api/nodes/${machine}/mode`, {
       method: 'PUT',
@@ -188,6 +222,11 @@ export const api = {
     request<SelectionResult>(`/api/nodes/${machine}/selection`, {
       method: 'PUT',
       body: JSON.stringify({ outbound }),
+    }),
+  setNodeEnabled: (tag: string, enabled: boolean) =>
+    request<void>('/api/nodes/enabled', {
+      method: 'PUT',
+      body: JSON.stringify({ tag, enabled }),
     }),
   runTest: (machine: string, tag: string, kind: TestKind) =>
     request<Measurement>(`/api/nodes/${machine}/test`, {

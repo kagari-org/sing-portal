@@ -2,11 +2,14 @@ use crate::{Result, Snapshot, Store, StoreError, bind_outbounds, now};
 
 impl Store {
     pub async fn snapshot(&self) -> Result<Snapshot> {
+        let mut disabled_nodes: Vec<String> = self.disabled_tags().await?.into_iter().collect();
+        disabled_nodes.sort();
         Ok(Snapshot {
             version: 1,
             exported_at: now(),
             subscriptions: self.list_subscriptions().await?,
             selections: self.selections().await?,
+            disabled_nodes,
         })
     }
 
@@ -67,6 +70,21 @@ impl Store {
             .execute(&mut *transaction)
             .await?;
         }
+
+        sqlx::query("DELETE FROM disabled_nodes")
+            .execute(&mut *transaction)
+            .await?;
+        for tag in &snapshot.disabled_nodes {
+            sqlx::query("INSERT INTO disabled_nodes (tag, disabled_at) VALUES (?, ?)")
+                .bind(tag)
+                .bind(now())
+                .execute(&mut *transaction)
+                .await?;
+        }
+
+        sqlx::query("DELETE FROM manual_measurements")
+            .execute(&mut *transaction)
+            .await?;
 
         transaction.commit().await?;
         Ok(())

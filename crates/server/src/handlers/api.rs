@@ -112,6 +112,14 @@ pub async fn import(
             ),
         )
         .await?;
+    state.notify_changed(&[
+        "subscriptions",
+        "providers",
+        "revision",
+        "nodes",
+        "measurements",
+        "audit",
+    ]);
 
     Ok(StatusCode::NO_CONTENT)
 }

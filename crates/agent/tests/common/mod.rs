@@ -22,6 +22,18 @@ pub fn free_port() -> u16 {
         .port()
 }
 
+/// Allocate several distinct ports at once; separate `free_port` calls can
+/// return the same number because the listener is dropped immediately.
+pub fn free_ports(count: usize) -> Vec<u16> {
+    let listeners: Vec<std::net::TcpListener> = (0..count)
+        .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
+        .collect();
+    listeners
+        .iter()
+        .map(|listener| listener.local_addr().unwrap().port())
+        .collect()
+}
+
 pub async fn wait_port(port: u16) {
     for _ in 0..200 {
         if tokio::net::TcpStream::connect(("127.0.0.1", port))

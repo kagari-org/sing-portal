@@ -1,16 +1,16 @@
 use std::time::Duration;
 
-use sing_portal_core::protocol::{AgentMessage, ServerMessage};
 use serde_json::Value;
 use sing_portal_core::canonical::{normalize, sort_by_tag};
 use sing_portal_core::detect::{Format, parse_subscription};
 use sing_portal_core::model::outbound_tag;
+use sing_portal_core::protocol::{AgentMessage, ServerMessage};
 use sing_portal_core::render::{AUTO_TAG, DIRECT_TAG};
 use sing_portal_store::{NodeReport, Source, Subscription};
 
 use crate::error::{ApiError, ApiResult};
-use crate::state::AppState;
 use crate::fetch;
+use crate::state::AppState;
 
 pub struct Prepared {
     pub format: Format,
@@ -48,10 +48,16 @@ pub async fn prepare(
 
 pub async fn active_outbounds(state: &AppState) -> ApiResult<Vec<Value>> {
     let subscriptions = state.store().list_subscriptions().await?;
+    let disabled = state.store().disabled_tags().await?;
     let mut outbounds: Vec<Value> = subscriptions
         .iter()
         .filter(|subscription| subscription.enabled)
         .flat_map(|subscription| subscription.outbounds.iter().cloned())
+        .filter(|outbound| {
+            outbound_tag(outbound)
+                .map(|tag| !disabled.contains(tag))
+                .unwrap_or(false)
+        })
         .collect();
     sort_by_tag(&mut outbounds);
     Ok(outbounds)
@@ -245,6 +251,7 @@ pub async fn probe(
     };
     let timeout = match kind {
         "bandwidth" | "both" => Duration::from_secs(90),
+        "egress" => Duration::from_secs(20),
         _ => Duration::from_secs(15),
     };
 

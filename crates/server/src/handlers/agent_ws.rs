@@ -40,6 +40,7 @@ async fn supervise(state: AppState, socket: WebSocket) {
         tracing::warn!(%name, %error, "cannot seed machine selection");
     }
     tracing::info!(%name, %version, "agent connected");
+    state.notify_changed(&["nodes"]);
 
     let mut writer = tokio::spawn(async move {
         while let Some(message) = outbound_rx.recv().await {
@@ -81,6 +82,19 @@ async fn supervise(state: AppState, socket: WebSocket) {
     writer.abort();
     state.registry().unregister(&name).await;
     tracing::info!(%name, "agent disconnected");
+    state.notify_changed(&["nodes"]);
+}
+
+async fn maybe_recover(state: &AppState, name: &str) {
+    let Ok(Some(selection)) = state.store().selection_with_mode(name).await else {
+        return;
+    };
+    if selection.mode != sing_portal_store::SelectionMode::Auto {
+        return;
+    }
+    if crate::auto::trigger_recovery(state, name).await {
+        tracing::info!(%name, "egress degraded, recovery evaluation started");
+    }
 }
 
 async fn dispatch(state: &AppState, name: &str, message: AgentMessage) {
@@ -92,6 +106,7 @@ async fn dispatch(state: &AppState, name: &str, message: AgentMessage) {
             health,
             error,
         } => {
+            let degraded = health == "egress_degraded";
             let report = NodeReport {
                 node_name: name.to_string(),
                 revision: reported_revision.clone(),
@@ -100,17 +115,18 @@ async fn dispatch(state: &AppState, name: &str, message: AgentMessage) {
                 error,
                 reported_at: sing_portal_store::now(),
             };
-            if let Err(error) = service::record_report(state, report).await {
-                tracing::warn!(%name, %error, "cannot store agent status");
+            match service::record_report(state, report).await {
+                Ok(true) => state.notify_changed(&["nodes", "audit"]),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(%name, %error, "cannot store agent status"),
+            }
+            if degraded {
+                maybe_recover(state, name).await;
             }
 
-            if let Err(error) = service::push_state_if_changed(
-                state,
-                name,
-                &reported_revision,
-                &reported_selection,
-            )
-            .await
+            if let Err(error) =
+                service::push_state_if_changed(state, name, &reported_revision, &reported_selection)
+                    .await
             {
                 tracing::warn!(%name, %error, "cannot push state");
             }
@@ -122,6 +138,7 @@ async fn dispatch(state: &AppState, name: &str, message: AgentMessage) {
             error,
             ..
         } => {
+            let degraded = health == "egress_degraded";
             let report = NodeReport {
                 node_name: name.to_string(),
                 revision,
@@ -130,8 +147,13 @@ async fn dispatch(state: &AppState, name: &str, message: AgentMessage) {
                 error,
                 reported_at: sing_portal_store::now(),
             };
-            if let Err(error) = service::record_report(state, report).await {
-                tracing::warn!(%name, %error, "cannot store sync result");
+            match service::record_report(state, report).await {
+                Ok(true) => state.notify_changed(&["nodes", "audit"]),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(%name, %error, "cannot store sync result"),
+            }
+            if degraded {
+                maybe_recover(state, name).await;
             }
         }
         other => {

@@ -14,6 +14,7 @@ pub enum Kind {
     Latency,
     Bandwidth,
     Both,
+    Egress,
 }
 
 impl Kind {
@@ -22,6 +23,7 @@ impl Kind {
             "latency" => Some(Kind::Latency),
             "bandwidth" => Some(Kind::Bandwidth),
             "both" => Some(Kind::Both),
+            "egress" => Some(Kind::Egress),
             _ => None,
         }
     }
@@ -31,6 +33,7 @@ impl Kind {
             Kind::Latency => "latency",
             Kind::Bandwidth => "bandwidth",
             Kind::Both => "both",
+            Kind::Egress => "egress",
         }
     }
 }
@@ -39,7 +42,11 @@ impl Kind {
 pub struct TesterConfig {
     pub timeout: Duration,
     pub inbound: SocketAddr,
+    pub egress_inbound: SocketAddr,
+    pub health_inbound: SocketAddr,
     pub download_url: String,
+    pub check_url: String,
+    pub check_timeout: Duration,
     pub max_bytes: u64,
 }
 
@@ -48,7 +55,11 @@ impl Default for TesterConfig {
         Self {
             timeout: Duration::from_secs(20),
             inbound: SocketAddr::from(([127, 0, 0, 1], 7899)),
+            egress_inbound: SocketAddr::from(([127, 0, 0, 1], 7900)),
+            health_inbound: SocketAddr::from(([127, 0, 0, 1], 7901)),
             download_url: "https://speed.cloudflare.com/__down?bytes=26214400".to_string(),
+            check_url: "https://www.cloudflare.com/cdn-cgi/trace".to_string(),
+            check_timeout: Duration::from_secs(8),
             max_bytes: 5 * 1024 * 1024,
         }
     }
@@ -98,14 +109,25 @@ impl Measurement {
             responsiveness: None,
         }
     }
+
+    fn egress(tag: &str, latency_ms: f64) -> Self {
+        Self {
+            tag: tag.to_string(),
+            kind: Kind::Egress.as_str().to_string(),
+            latency_ms: Some(latency_ms),
+            down_mbps: None,
+            up_mbps: None,
+            responsiveness: None,
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct Tester {
     config: TesterConfig,
     api: BoxApi,
-    // the download test uses one inbound and one selector, keep it serialised
-    download_lock: Arc<Mutex<()>>,
+    // the bandwidth and egress probes share `s_test`, keep them serialised
+    selector_lock: Arc<Mutex<()>>,
 }
 
 impl Tester {
@@ -113,7 +135,7 @@ impl Tester {
         Self {
             config,
             api,
-            download_lock: Arc::new(Mutex::new(())),
+            selector_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -127,6 +149,7 @@ impl Tester {
                 let down = self.download(tag).await?;
                 Ok(Measurement::both(tag, latency, down))
             }
+            Kind::Egress => Ok(Measurement::egress(tag, self.egress_check(tag).await?)),
         }
     }
 
@@ -170,11 +193,56 @@ impl Tester {
         }
     }
 
+    /// Fetch a small URL through the isolated egress inbound. Its route and
+    /// DNS server both detour to `s_test`, so the candidate is exercised
+    /// (including DNS) before the portal touches the real `s_out`.
+    async fn egress_check(&self, tag: &str) -> Result<f64> {
+        let _guard = self.selector_lock.lock().await;
+        self.api.select(TEST_SELECTOR, tag).await?;
+        self.fetch_check(self.config.egress_inbound, "egress check")
+            .await
+    }
+
+    /// Check the real `s_out` path. This is only an HTTP probe: it never
+    /// changes a selector, so it can run while traffic is being served.
+    pub async fn health_check(&self) -> Result<f64> {
+        self.fetch_check(self.config.health_inbound, "egress health check")
+            .await
+    }
+
+    async fn fetch_check(&self, inbound: SocketAddr, label: &str) -> Result<f64> {
+        let proxy = format!("http://{inbound}");
+        let proxy = reqwest::Proxy::all(&proxy)
+            .map_err(|error| AgentError::Measure(format!("invalid {label} inbound: {error}")))?;
+        let client = reqwest::Client::builder()
+            .proxy(proxy)
+            .timeout(self.config.check_timeout)
+            .build()
+            .map_err(|error| {
+                AgentError::Measure(format!("cannot build {label} client: {error}"))
+            })?;
+
+        let started = Instant::now();
+        let response = client
+            .get(&self.config.check_url)
+            .send()
+            .await
+            .map_err(|error| AgentError::Measure(format!("{label} failed: {error}")))?;
+        if !response.status().is_success() {
+            return Err(AgentError::Measure(format!(
+                "{label} failed: http {}",
+                response.status()
+            )));
+        }
+
+        Ok(started.elapsed().as_secs_f64() * 1000.0)
+    }
+
     /// Bounded single-stream download through the dedicated test selector.
     /// When the deadline hits, whatever arrived so far is used for the rate,
     /// so slow nodes still produce a (low) number instead of a failure.
     async fn download(&self, tag: &str) -> Result<f64> {
-        let _guard = self.download_lock.lock().await;
+        let _guard = self.selector_lock.lock().await;
         self.api.select(TEST_SELECTOR, tag).await?;
 
         let proxy = format!("http://{}", self.config.inbound);

@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
@@ -198,6 +199,9 @@ pub async fn evaluate_machine(
         return Ok(None);
     }
 
+    state.store().clear_measurements(machine).await?;
+    state.notify_changed(&["measurements", "nodes"]);
+
     let total_tags = tags.len();
     state
         .update_evaluation(machine, "latency", 0, total_tags, None)
@@ -210,18 +214,34 @@ pub async fn evaluate_machine(
             let machine = machine.to_string();
             let done = done.clone();
             async move {
-                let result = match service::probe(&state, &machine, &tag, "latency").await {
-                    Ok(probe) => probe.latency_ms.map(|latency_ms| (tag.clone(), latency_ms)),
-                    Err(error) => {
-                        tracing::debug!(%machine, %tag, %error, "auto latency probe failed");
-                        None
-                    }
+                let (latency_ms, ranked) =
+                    match service::probe(&state, &machine, &tag, "latency").await {
+                        Ok(probe) => (
+                            probe.latency_ms,
+                            probe.latency_ms.map(|latency_ms| (tag.clone(), latency_ms)),
+                        ),
+                        Err(error) => {
+                            tracing::debug!(%machine, %tag, %error, "auto latency probe failed");
+                            (None, None)
+                        }
+                    };
+                let measurement = Measurement {
+                    node_name: machine.clone(),
+                    tag: tag.clone(),
+                    latency_ms,
+                    down_mbps: None,
+                    score: 0.0,
+                    measured_at: sing_portal_store::now(),
                 };
+                if let Err(error) = state.store().upsert_measurement(&measurement).await {
+                    tracing::warn!(%machine, %tag, %error, "cannot store latency measurement");
+                }
+                state.notify_changed(&["measurements", "nodes"]);
                 let index = done.fetch_add(1, AtomicOrdering::SeqCst) + 1;
                 state
                     .update_evaluation(&machine, "latency", index, total_tags, Some(&tag))
                     .await;
-                result
+                ranked
             }
         }))
         .buffer_unordered(8)
@@ -232,6 +252,7 @@ pub async fn evaluate_machine(
     if latency.is_empty() {
         return Ok(Some(failed(machine, 0, "no latency probe succeeded")));
     }
+    let baseline: HashMap<String, f64> = latency.iter().cloned().collect();
     latency.sort_by(|left, right| {
         left.1
             .partial_cmp(&right.1)
@@ -251,13 +272,11 @@ pub async fn evaluate_machine(
         candidates.push(selection.outbound.clone());
     }
 
-    let measured_at = sing_portal_store::now();
     let total_candidates = candidates.len();
     state
         .update_evaluation(machine, "bandwidth", 0, total_candidates, None)
         .await;
 
-    let mut measurements = Vec::with_capacity(candidates.len());
     let mut scored: Vec<(String, f64, Option<f64>, Option<f64>)> = Vec::new();
 
     for (index, tag) in candidates.iter().enumerate() {
@@ -266,32 +285,41 @@ pub async fn evaluate_machine(
             .await;
         match service::probe(state, machine, tag, "both").await {
             Ok(probe) => {
+                let latency_ms = probe.latency_ms.or_else(|| baseline.get(tag).copied());
                 let score = state
                     .config()
                     .score
-                    .score(probe.latency_ms.unwrap_or(f64::MAX), probe.down_mbps);
-                measurements.push(Measurement {
+                    .score(latency_ms.unwrap_or(f64::MAX), probe.down_mbps);
+                let measurement = Measurement {
                     node_name: machine.to_string(),
                     tag: tag.clone(),
-                    latency_ms: probe.latency_ms,
+                    latency_ms,
                     down_mbps: probe.down_mbps,
                     score,
-                    measured_at,
-                });
+                    measured_at: sing_portal_store::now(),
+                };
+                if let Err(error) = state.store().upsert_measurement(&measurement).await {
+                    tracing::warn!(%machine, %tag, %error, "cannot store bandwidth measurement");
+                }
+                state.notify_changed(&["measurements", "nodes"]);
                 if score > 0.0 {
-                    scored.push((tag.clone(), score, probe.latency_ms, probe.down_mbps));
+                    scored.push((tag.clone(), score, latency_ms, probe.down_mbps));
                 }
             }
             Err(error) => {
                 tracing::debug!(%machine, %tag, %error, "auto probe failed");
-                measurements.push(Measurement {
+                let measurement = Measurement {
                     node_name: machine.to_string(),
                     tag: tag.clone(),
-                    latency_ms: None,
+                    latency_ms: baseline.get(tag).copied(),
                     down_mbps: None,
                     score: 0.0,
-                    measured_at,
-                });
+                    measured_at: sing_portal_store::now(),
+                };
+                if let Err(error) = state.store().upsert_measurement(&measurement).await {
+                    tracing::warn!(%machine, %tag, %error, "cannot store failed bandwidth probe");
+                }
+                state.notify_changed(&["measurements", "nodes"]);
             }
         }
     }
@@ -306,11 +334,6 @@ pub async fn evaluate_machine(
         .await;
 
     if scored.is_empty() {
-        state
-            .store()
-            .replace_measurements(machine, &measurements)
-            .await?;
-        state.notify_changed(&["measurements", "nodes"]);
         return Ok(Some(failed(
             machine,
             candidates.len(),
@@ -381,12 +404,6 @@ pub async fn evaluate_machine(
     state
         .update_evaluation(machine, "verify", checked, max_checks, None)
         .await;
-
-    state
-        .store()
-        .replace_measurements(machine, &measurements)
-        .await?;
-    state.notify_changed(&["measurements", "nodes"]);
 
     let Some((chosen_tag, chosen_score)) = chosen else {
         return Ok(Some(Evaluation {

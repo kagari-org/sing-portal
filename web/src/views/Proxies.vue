@@ -180,9 +180,11 @@ const columns: DataTableColumns<Row> = [
           trigger: () =>
             h('div', { style: 'line-height: 1.35' }, [
               h('div', formatLatency(result.latencyMs)),
-              h(NText, { depth: 3, style: 'font-size: 12px' }, {
-                default: () => formatMbps(result.downMbps),
-              }),
+              result.downMbps === null
+                ? null
+                : h(NText, { depth: 3, style: 'font-size: 12px' }, {
+                    default: () => formatMbps(result.downMbps),
+                  }),
             ]),
           default: () => `Automatic measurement ${formatTimestamp(result.measuredAt)}`,
         },
@@ -195,7 +197,9 @@ const columns: DataTableColumns<Row> = [
     width: 120,
     render: (row) => {
       const result = autoByTag.value.get(row.tag)
-      if (!result) return h(NText, { depth: 3 }, { default: () => '—' })
+      if (!result || result.downMbps === null) {
+        return h(NText, { depth: 3 }, { default: () => '—' })
+      }
       return h(NSpace, { size: 6, align: 'center' }, {
         default: () => [
           h(NText, { depth: 2 }, { default: () => result.score.toFixed(1) }),

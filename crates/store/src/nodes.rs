@@ -147,6 +147,35 @@ impl Store {
         Ok(())
     }
 
+    pub async fn clear_measurements(&self, node_name: &str) -> Result<()> {
+        sqlx::query("DELETE FROM measurements WHERE node_name = ?")
+            .bind(node_name)
+            .execute(self.pool())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_measurement(&self, measurement: &Measurement) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO measurements (node_name, tag, latency_ms, down_mbps, score, measured_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(node_name, tag) DO UPDATE SET
+                latency_ms = excluded.latency_ms,
+                down_mbps = excluded.down_mbps,
+                score = excluded.score,
+                measured_at = excluded.measured_at",
+        )
+        .bind(&measurement.node_name)
+        .bind(&measurement.tag)
+        .bind(measurement.latency_ms)
+        .bind(measurement.down_mbps)
+        .bind(measurement.score)
+        .bind(measurement.measured_at)
+        .execute(self.pool())
+        .await?;
+        Ok(())
+    }
+
     pub async fn measurements(&self, node_name: &str) -> Result<Vec<Measurement>> {
         let rows = sqlx::query(
             "SELECT node_name, tag, latency_ms, down_mbps, score, measured_at FROM measurements

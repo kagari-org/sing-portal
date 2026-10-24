@@ -326,6 +326,59 @@ async fn manual_measurements_are_separate_and_merge_fields() {
 }
 
 #[tokio::test]
+async fn measurements_can_be_written_incrementally() {
+    let (_dir, store) = new_store().await;
+    store
+        .upsert_measurement(&Measurement {
+            node_name: "home".into(),
+            tag: "a".into(),
+            latency_ms: Some(30.0),
+            down_mbps: None,
+            score: 0.0,
+            measured_at: 10,
+        })
+        .await
+        .unwrap();
+    store
+        .upsert_measurement(&Measurement {
+            node_name: "home".into(),
+            tag: "b".into(),
+            latency_ms: None,
+            down_mbps: None,
+            score: 0.0,
+            measured_at: 11,
+        })
+        .await
+        .unwrap();
+
+    let stored = store.measurements("home").await.unwrap();
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored[0].tag, "a");
+    assert_eq!(stored[0].latency_ms, Some(30.0));
+
+    store
+        .upsert_measurement(&Measurement {
+            node_name: "home".into(),
+            tag: "a".into(),
+            latency_ms: Some(30.0),
+            down_mbps: Some(50.0),
+            score: 80.0,
+            measured_at: 12,
+        })
+        .await
+        .unwrap();
+    let stored = store.measurements("home").await.unwrap();
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored[0].tag, "a");
+    assert_eq!(stored[0].down_mbps, Some(50.0));
+    assert_eq!(stored[0].score, 80.0);
+    assert_eq!(stored[0].measured_at, 12);
+
+    store.clear_measurements("home").await.unwrap();
+    assert!(store.measurements("home").await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn disabled_nodes_survive_snapshot() {
     let (_dir, store) = new_store().await;
     store

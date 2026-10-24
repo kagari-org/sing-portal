@@ -19,6 +19,10 @@ struct TestApp {
 }
 
 async fn app() -> TestApp {
+    app_with_candidates(5).await
+}
+
+async fn app_with_candidates(auto_candidates: usize) -> TestApp {
     let dir = TempDir::new().unwrap();
     let static_dir = dir.path().join("web");
     std::fs::create_dir_all(&static_dir).unwrap();
@@ -34,7 +38,7 @@ async fn app() -> TestApp {
         static_dir: Some(static_dir),
         embed_web: false,
         auto_interval: Duration::from_secs(600),
-        auto_candidates: 5,
+        auto_candidates,
         auto_margin: 0.15,
         score: sing_portal_core::score::ScoreConfig::default(),
     };
@@ -766,6 +770,146 @@ async fn evaluation_skips_a_candidate_that_fails_the_egress_check() {
         vec!["provider-a · JP 02".to_string()],
         "candidate checks must go through s_test; only the final winner switches s_out"
     );
+
+    agent.abort();
+    server.abort();
+}
+
+#[tokio::test]
+async fn keeps_latency_for_nodes_that_miss_the_bandwidth_round() {
+    let app = app_with_candidates(1).await;
+    create_subscription(&app, "Provider A").await;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let state = app.state.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router(state)).await.unwrap();
+    });
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{address}/api/v1/agent/ws"))
+            .await
+            .unwrap();
+    socket
+        .send(Message::Text(
+            serde_json::to_string(&AgentMessage::Hello {
+                name: "home".into(),
+                version: "test".into(),
+            })
+            .unwrap()
+            .into(),
+        ))
+        .await
+        .unwrap();
+
+    let agent = tokio::spawn(async move {
+        while let Some(frame) = socket.next().await {
+            let Ok(Message::Text(text)) = frame else {
+                break;
+            };
+            let Ok(message) = serde_json::from_str::<ServerMessage>(&text) else {
+                continue;
+            };
+
+            let reply = match message {
+                ServerMessage::Sync {
+                    id,
+                    revision,
+                    selection,
+                    ..
+                } => AgentMessage::SyncResult {
+                    id,
+                    revision,
+                    selection,
+                    health: "ok".into(),
+                    error: String::new(),
+                    applied: false,
+                },
+                ServerMessage::Select { id, .. } => {
+                    AgentMessage::SelectResult { id, applied: true }
+                }
+                ServerMessage::Test { id, kind, tag } => match kind.as_str() {
+                    "latency" => AgentMessage::TestResult {
+                        id,
+                        kind,
+                        latency_ms: Some(if tag.contains("US 01") { 10.0 } else { 30.0 }),
+                        down_mbps: None,
+                        up_mbps: None,
+                        responsiveness: None,
+                    },
+                    "both" => AgentMessage::TestResult {
+                        id,
+                        kind,
+                        latency_ms: Some(20.0),
+                        down_mbps: Some(100.0),
+                        up_mbps: None,
+                        responsiveness: None,
+                    },
+                    _ => AgentMessage::TestResult {
+                        id,
+                        kind,
+                        latency_ms: Some(50.0),
+                        down_mbps: None,
+                        up_mbps: None,
+                        responsiveness: None,
+                    },
+                },
+            };
+
+            if socket
+                .send(Message::Text(serde_json::to_string(&reply).unwrap().into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    for _ in 0..100 {
+        if app.state.registry().is_connected("home").await {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let response = router(app.state.clone())
+        .oneshot(
+            request("POST", "/api/nodes/home/auto")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    let mut evaluation = app.state.evaluation("home").await.unwrap();
+    for _ in 0..100 {
+        if !evaluation.running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        evaluation = app.state.evaluation("home").await.unwrap();
+    }
+    assert!(!evaluation.running);
+
+    let body = get_json(&app, "/api/nodes/home/measurements").await;
+    let rows = body["auto"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+
+    let unmeasured = rows
+        .iter()
+        .find(|row| row["tag"].as_str().unwrap().ends_with("JP 02"))
+        .expect("JP latency row");
+    assert_eq!(unmeasured["latencyMs"], 30.0);
+    assert_eq!(unmeasured["downMbps"], Value::Null);
+
+    let measured = rows
+        .iter()
+        .find(|row| row["tag"].as_str().unwrap().ends_with("US 01"))
+        .expect("US bandwidth row");
+    assert_eq!(measured["downMbps"], 100.0);
 
     agent.abort();
     server.abort();

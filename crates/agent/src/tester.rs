@@ -60,7 +60,7 @@ impl Default for TesterConfig {
             download_url: "https://speed.cloudflare.com/__down?bytes=26214400".to_string(),
             check_url: "https://www.cloudflare.com/cdn-cgi/trace".to_string(),
             check_timeout: Duration::from_secs(8),
-            max_bytes: 5 * 1024 * 1024,
+            max_bytes: 2 * 1024 * 1024,
         }
     }
 }

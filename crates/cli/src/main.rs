@@ -51,10 +51,10 @@ struct ServeArgs {
     #[arg(long, env = "SING_PORTAL_STATIC_DIR")]
     static_dir: Option<PathBuf>,
 
-    #[arg(long, env = "SING_PORTAL_AUTO_INTERVAL", default_value = "30m")]
+    #[arg(long, env = "SING_PORTAL_AUTO_INTERVAL", default_value = "2h")]
     auto_interval: String,
 
-    #[arg(long, env = "SING_PORTAL_AUTO_CANDIDATES", default_value_t = 20)]
+    #[arg(long, env = "SING_PORTAL_AUTO_CANDIDATES", default_value_t = 6)]
     auto_candidates: usize,
 
     #[arg(long, env = "SING_PORTAL_AUTO_MARGIN", default_value_t = 0.15)]
@@ -175,7 +175,7 @@ struct AgentArgs {
     #[arg(
         long,
         env = "SING_PORTAL_TEST_MAX_BYTES",
-        default_value_t = 5 * 1024 * 1024
+        default_value_t = 2 * 1024 * 1024
     )]
     test_max_bytes: u64,
 

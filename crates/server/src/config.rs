@@ -31,8 +31,8 @@ impl Default for ServerConfig {
             fetch_max_bytes: 8 * 1024 * 1024,
             static_dir: None,
             embed_web: true,
-            auto_interval: Duration::from_secs(10 * 60),
-            auto_candidates: 5,
+            auto_interval: Duration::from_secs(2 * 3600),
+            auto_candidates: 6,
             auto_margin: 0.15,
             score: sing_portal_core::score::ScoreConfig::default(),
         }

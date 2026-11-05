@@ -1,6 +1,5 @@
 mod common;
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -183,30 +182,29 @@ async fn once_is_best_effort_when_portal_is_down() {
         listener.local_addr().unwrap()
     };
 
-    let mut config = minimal_config().await;
+    let (mut config, _dir) = minimal_config().await;
     config.portal_url = format!("http://{closed}");
     config.best_effort = true;
     let agent = Agent::new(config).unwrap();
     assert!(agent.run().await.is_ok());
 
-    let mut config = minimal_config().await;
+    let (mut config, _dir2) = minimal_config().await;
     config.portal_url = format!("http://{closed}");
     config.best_effort = false;
     let agent = Agent::new(config).unwrap();
     assert!(agent.run().await.is_err());
 }
 
-async fn minimal_config() -> AgentConfig {
+async fn minimal_config() -> (AgentConfig, TempDir) {
     let dir = TempDir::new().unwrap();
-    let base = dir.keep();
-    let path: PathBuf = base.join("template.json");
+    let path = dir.path().join("template.json");
     std::fs::write(&path, TEMPLATE).unwrap();
     let config = AgentConfig {
         portal_url: String::new(),
         node_name: "home".into(),
         template_path: path,
-        config_path: base.join("config.json"),
-        state_dir: base.join("state"),
+        config_path: dir.path().join("config.json"),
+        state_dir: dir.path().join("state"),
         api_url: "http://127.0.0.1:1".into(),
         latency_url: "http://127.0.0.1:1/".into(),
         restart_cmd: None,
@@ -223,5 +221,5 @@ async fn minimal_config() -> AgentConfig {
             ..sing_portal_agent::tester::TesterConfig::default()
         },
     };
-    config
+    (config, dir)
 }

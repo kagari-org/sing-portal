@@ -13,6 +13,8 @@ pub struct LocalState {
     pub applied_latency_url: String,
     #[serde(default)]
     pub applied_renderer_version: u32,
+    #[serde(default)]
+    pub applied_template_hash: String,
     pub last_error: String,
     pub updated_at: i64,
 }

@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::error::Error;
 use crate::model::{is_proxy_outbound, outbound_tag};
@@ -22,10 +22,16 @@ pub fn render(template: &Value, outbounds: &[Value], test_url: &str) -> Result<V
         return Err(Error::TemplateHasOutbounds);
     }
 
+    let defaults = match config.remove("outbound_defaults") {
+        Some(Value::Object(defaults)) => Some(defaults),
+        Some(_) => return Err(Error::TemplateOutboundDefaults),
+        None => None,
+    };
+
     let nodes: Vec<Value> = outbounds
         .iter()
         .filter(|outbound| is_proxy_outbound(outbound))
-        .cloned()
+        .map(|outbound| with_defaults(outbound, defaults.as_ref()))
         .collect();
     let tags: Vec<Value> = nodes
         .iter()
@@ -65,6 +71,22 @@ pub fn render(template: &Value, outbounds: &[Value], test_url: &str) -> Result<V
 
     config.insert("outbounds".to_string(), Value::Array(rendered));
     Ok(Value::Object(config))
+}
+
+/// Template-level dial defaults. Per-outbound values always win, so a
+/// subscription that already pins a field keeps its own setting.
+fn with_defaults(outbound: &Value, defaults: Option<&Map<String, Value>>) -> Value {
+    let mut outbound = outbound.clone();
+    let Some(defaults) = defaults else {
+        return outbound;
+    };
+    let Some(object) = outbound.as_object_mut() else {
+        return outbound;
+    };
+    for (key, value) in defaults {
+        object.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+    outbound
 }
 
 pub fn to_bytes(config: &Value) -> Vec<u8> {

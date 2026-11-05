@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sing_portal_core::model::{is_proxy_outbound, outbound_tag};
 use sing_portal_core::render::{
     AUTO_TAG, DIRECT_TAG, EGRESS_INBOUND_TAG, HEALTH_INBOUND_TAG, PROBE_DNS_TAG, SELECTOR_TAG,
@@ -114,6 +115,13 @@ async fn rollback(config: &AgentConfig, api: &BoxApi) -> Result<()> {
     state::write_atomic(&config.config_path, &bytes).await?;
     restart(config).await?;
     wait_healthy(config, api).await
+}
+
+pub async fn template_fingerprint(config: &AgentConfig) -> Result<String> {
+    let bytes = tokio::fs::read(&config.template_path).await?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
 pub async fn render_bytes(config: &AgentConfig, outbounds: &[Value]) -> Result<Vec<u8>> {

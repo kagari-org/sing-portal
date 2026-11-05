@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use sing_portal_agent::AgentConfig;
-use sing_portal_agent::apply::render_bytes;
+use sing_portal_agent::apply::{render_bytes, template_fingerprint};
 use tempfile::TempDir;
 
 fn config(dir: &TempDir, template: &Value) -> AgentConfig {
@@ -117,4 +117,50 @@ async fn renders_test_and_egress_probe_rules() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[tokio::test]
+async fn applies_outbound_defaults_from_template() {
+    let dir = TempDir::new().unwrap();
+    let template = json!({
+        "log": { "level": "warn" },
+        "outbound_defaults": {
+            "tcp_keep_alive": "1m",
+            "tcp_keep_alive_interval": "30s"
+        }
+    });
+    let agent = config(&dir, &template);
+    let outbounds = json!([
+        { "type": "socks", "tag": "node-a", "server": "127.0.0.1", "server_port": 1 }
+    ]);
+
+    let rendered: Value = serde_json::from_slice(
+        &render_bytes(&agent, outbounds.as_array().unwrap())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+
+    assert!(rendered.get("outbound_defaults").is_none());
+    let node = rendered["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "node-a")
+        .expect("rendered node");
+    assert_eq!(node["tcp_keep_alive"], "1m");
+    assert_eq!(node["tcp_keep_alive_interval"], "30s");
+}
+
+#[tokio::test]
+async fn template_fingerprint_tracks_template_content() {
+    let dir = TempDir::new().unwrap();
+    let agent = config(&dir, &json!({ "log": { "level": "warn" } }));
+
+    let first = template_fingerprint(&agent).await.unwrap();
+    assert_eq!(first, template_fingerprint(&agent).await.unwrap());
+
+    std::fs::write(&agent.template_path, br#"{"log":{"level":"info"}}"#).unwrap();
+    let changed = template_fingerprint(&agent).await.unwrap();
+    assert_ne!(first, changed);
 }

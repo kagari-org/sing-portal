@@ -19,7 +19,7 @@ use api::BoxApi;
 pub use config::AgentConfig;
 pub use error::{AgentError, Result};
 
-const RENDERER_VERSION: u32 = 5;
+const RENDERER_VERSION: u32 = 6;
 use tester::{Kind, Tester};
 
 #[derive(Default)]
@@ -264,18 +264,26 @@ impl Agent {
         // the agent controls parts of the rendered config (test inbound), so a
         // renderer change must be re-applied even when the revision is stable
         let renderer_changed = local.applied_renderer_version != RENDERER_VERSION;
+        // templates carry defaults that are not part of the portal revision
+        let template_hash = apply::template_fingerprint(&self.config)
+            .await
+            .unwrap_or_default();
+        let template_changed =
+            !template_hash.is_empty() && local.applied_template_hash != template_hash;
         if empty {
             health = "no_active_subscriptions".to_string();
         } else if revision != local.applied_revision
             || config_missing
             || latency_url_changed
             || renderer_changed
+            || template_changed
         {
             match apply::apply(&self.config, &outbounds, &self.api).await {
                 Ok(()) => {
                     local.applied_revision = revision.clone();
                     local.applied_latency_url = self.config.latency_url.clone();
                     local.applied_renderer_version = RENDERER_VERSION;
+                    local.applied_template_hash = template_hash;
                     applied = true;
                 }
                 Err(apply_error) => {

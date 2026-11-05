@@ -290,3 +290,43 @@ fn render_rejects_template_with_outbounds() {
     let error = render(&json!({"outbounds": []}), &[], DEFAULT_TEST_URL).unwrap_err();
     assert!(error.to_string().contains("outbounds"));
 }
+
+#[test]
+fn render_applies_outbound_defaults() {
+    let template = json!({
+        "outbound_defaults": {
+            "tcp_keep_alive": "1m",
+            "tcp_keep_alive_interval": "30s",
+            "connect_timeout": "5s"
+        }
+    });
+    let outbounds = vec![
+        json!({"type":"vless","tag":"n1","server":"h","server_port":443,"uuid":"u"}),
+        json!({
+            "type":"trojan","tag":"n2","server":"h","server_port":443,
+            "password":"p","tcp_keep_alive":"10m"
+        }),
+    ];
+
+    let rendered = render(&template, &outbounds, DEFAULT_TEST_URL).unwrap();
+    assert!(rendered.get("outbound_defaults").is_none());
+
+    let nodes: Vec<&Value> = rendered["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|outbound| matches!(outbound["tag"].as_str(), Some("n1" | "n2")))
+        .collect();
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0]["tcp_keep_alive"], "1m");
+    assert_eq!(nodes[0]["tcp_keep_alive_interval"], "30s");
+    assert_eq!(nodes[0]["connect_timeout"], "5s");
+    assert_eq!(nodes[1]["tcp_keep_alive"], "10m");
+    assert_eq!(nodes[1]["tcp_keep_alive_interval"], "30s");
+}
+
+#[test]
+fn render_rejects_non_object_outbound_defaults() {
+    let error = render(&json!({"outbound_defaults": "1m"}), &[], DEFAULT_TEST_URL).unwrap_err();
+    assert!(error.to_string().contains("outbound_defaults"));
+}

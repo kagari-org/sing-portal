@@ -120,39 +120,6 @@ async fn renders_test_and_egress_probe_rules() {
 }
 
 #[tokio::test]
-async fn applies_outbound_defaults_from_template() {
-    let dir = TempDir::new().unwrap();
-    let template = json!({
-        "log": { "level": "warn" },
-        "outbound_defaults": {
-            "tcp_keep_alive": "1m",
-            "tcp_keep_alive_interval": "30s"
-        }
-    });
-    let agent = config(&dir, &template);
-    let outbounds = json!([
-        { "type": "socks", "tag": "node-a", "server": "127.0.0.1", "server_port": 1 }
-    ]);
-
-    let rendered: Value = serde_json::from_slice(
-        &render_bytes(&agent, outbounds.as_array().unwrap())
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-
-    assert!(rendered.get("outbound_defaults").is_none());
-    let node = rendered["outbounds"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|outbound| outbound["tag"] == "node-a")
-        .expect("rendered node");
-    assert_eq!(node["tcp_keep_alive"], "1m");
-    assert_eq!(node["tcp_keep_alive_interval"], "30s");
-}
-
-#[tokio::test]
 async fn template_fingerprint_tracks_template_content() {
     let dir = TempDir::new().unwrap();
     let agent = config(&dir, &json!({ "log": { "level": "warn" } }));

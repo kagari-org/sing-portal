@@ -1077,3 +1077,209 @@ fn with_bearer(url: &str, token: &str) -> tokio_tungstenite::tungstenite::http::
     );
     request
 }
+
+/// A fake agent for `home` that records the `automatic` flag of every probe it
+/// is asked for, so a test can see how an evaluation labelled them on the wire.
+struct RecordingAgent {
+    automatic: Arc<Mutex<Vec<bool>>>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl RecordingAgent {
+    fn flags(&self) -> Vec<bool> {
+        self.automatic.lock().unwrap().clone()
+    }
+}
+
+impl Drop for RecordingAgent {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
+}
+
+async fn recording_agent(app: &TestApp) -> RecordingAgent {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let state = app.state.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router(state)).await.unwrap();
+    });
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{address}/api/v1/agent/ws"))
+            .await
+            .unwrap();
+    socket
+        .send(Message::Text(
+            serde_json::to_string(&AgentMessage::Hello {
+                name: "home".into(),
+                version: "test".into(),
+            })
+            .unwrap()
+            .into(),
+        ))
+        .await
+        .unwrap();
+
+    let automatic = Arc::new(Mutex::new(Vec::<bool>::new()));
+    let recorder = automatic.clone();
+    let agent = tokio::spawn(async move {
+        while let Some(frame) = socket.next().await {
+            let Ok(Message::Text(text)) = frame else {
+                break;
+            };
+            let Ok(message) = serde_json::from_str::<ServerMessage>(&text) else {
+                continue;
+            };
+
+            let reply = match message {
+                ServerMessage::Sync {
+                    id,
+                    revision,
+                    selection,
+                    ..
+                } => AgentMessage::SyncResult {
+                    id,
+                    revision,
+                    selection,
+                    health: "ok".into(),
+                    error: String::new(),
+                    applied: false,
+                },
+                ServerMessage::Select { id, .. } => {
+                    AgentMessage::SelectResult { id, applied: true }
+                }
+                ServerMessage::Test {
+                    id,
+                    kind,
+                    tag,
+                    automatic,
+                } => {
+                    recorder.lock().unwrap().push(automatic);
+                    AgentMessage::TestResult {
+                        id,
+                        kind,
+                        latency_ms: Some(if tag.contains("US 01") { 10.0 } else { 30.0 }),
+                        down_mbps: Some(100.0),
+                        up_mbps: None,
+                        responsiveness: None,
+                    }
+                }
+            };
+
+            if socket
+                .send(Message::Text(serde_json::to_string(&reply).unwrap().into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    for _ in 0..100 {
+        if app.state.registry().is_connected("home").await {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    RecordingAgent {
+        automatic,
+        tasks: vec![server, agent],
+    }
+}
+
+#[tokio::test]
+async fn ui_evaluation_labels_its_probes_as_manual() {
+    let app = app().await;
+    create_subscription(&app, "Provider A").await;
+    let agent = recording_agent(&app).await;
+
+    let response = router(app.state.clone())
+        .oneshot(
+            request("POST", "/api/nodes/home/auto")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    let mut evaluation = app.state.evaluation("home").await.unwrap();
+    for _ in 0..200 {
+        if !evaluation.running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        evaluation = app.state.evaluation("home").await.unwrap();
+    }
+    assert!(!evaluation.running);
+
+    let flags = agent.flags();
+    assert!(!flags.is_empty(), "the evaluation should have probed");
+    assert!(
+        flags.iter().all(|automatic| !automatic),
+        "a UI evaluation is a manual one, got {flags:?}"
+    );
+}
+
+#[tokio::test]
+async fn background_cycle_labels_its_probes_as_automatic() {
+    let app = app().await;
+    create_subscription(&app, "Provider A").await;
+    let agent = recording_agent(&app).await;
+
+    sing_portal_server::auto::run_once(&app.state)
+        .await
+        .unwrap();
+
+    let flags = agent.flags();
+    assert!(!flags.is_empty(), "the cycle should have probed");
+    assert!(
+        flags.iter().all(|automatic| *automatic),
+        "a scheduled cycle must not spend a manual-test-only device, got {flags:?}"
+    );
+}
+
+#[tokio::test]
+async fn recovery_evaluation_labels_its_probes_as_automatic() {
+    let app = app().await;
+    create_subscription(&app, "Provider A").await;
+    let agent = recording_agent(&app).await;
+
+    assert!(
+        sing_portal_server::auto::trigger_recovery(&app.state, "home").await,
+        "the watchdog should be allowed to start a recovery"
+    );
+
+    let mut started = false;
+    for _ in 0..100 {
+        if let Some(evaluation) = app.state.evaluation("home").await
+            && evaluation.running
+        {
+            started = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(started, "the recovery evaluation should start");
+
+    let mut evaluation = app.state.evaluation("home").await.unwrap();
+    for _ in 0..200 {
+        if !evaluation.running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        evaluation = app.state.evaluation("home").await.unwrap();
+    }
+
+    let flags = agent.flags();
+    assert!(!flags.is_empty(), "the recovery should have probed");
+    assert!(
+        flags.iter().all(|automatic| *automatic),
+        "a watchdog recovery is nobody's request, got {flags:?}"
+    );
+}

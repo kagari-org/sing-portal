@@ -71,7 +71,7 @@ pub async fn run_once(state: &AppState) -> ApiResult<Vec<Evaluation>> {
                 return None;
             }
 
-            match evaluate_locked(&state, &machine, None).await {
+            match evaluate_locked(&state, &machine, None, false).await {
                 Ok(Some(evaluation)) => Some(evaluation),
                 Ok(None) => None,
                 Err(error) => {
@@ -91,12 +91,16 @@ pub async fn run_once(state: &AppState) -> ApiResult<Vec<Evaluation>> {
 
 /// Start a full evaluation in the background. Returns false when one is
 /// already running for this machine.
+///
+/// This is the UI entry point, so its probes go out as manual ones: a device
+/// that refuses automatic measurements still answers a person asking for them.
 pub async fn trigger(state: &AppState, machine: &str) -> bool {
-    trigger_with_limit(state, machine, None).await
+    trigger_with_limit(state, machine, None, true).await
 }
 
 /// Watchdog entry point: when the real egress is reported broken, run a
-/// smaller evaluation immediately instead of waiting for the next cycle.
+/// smaller evaluation immediately instead of waiting for the next cycle. This
+/// is nobody's request, so the probes stay automatic.
 pub async fn trigger_recovery(state: &AppState, machine: &str) -> bool {
     if !state.registry().is_connected(machine).await {
         return false;
@@ -114,13 +118,14 @@ pub async fn trigger_recovery(state: &AppState, machine: &str) -> bool {
     }
 
     let limit = state.config().auto_candidates.clamp(1, RECOVERY_CANDIDATES);
-    trigger_with_limit(state, machine, Some(limit)).await
+    trigger_with_limit(state, machine, Some(limit), false).await
 }
 
 async fn trigger_with_limit(
     state: &AppState,
     machine: &str,
     candidate_limit: Option<usize>,
+    manual: bool,
 ) -> bool {
     if !state.begin_auto(machine).await {
         return false;
@@ -129,7 +134,7 @@ async fn trigger_with_limit(
     let state = state.clone();
     let machine = machine.to_string();
     tokio::spawn(async move {
-        match evaluate_locked(&state, &machine, candidate_limit).await {
+        match evaluate_locked(&state, &machine, candidate_limit, manual).await {
             Ok(Some(evaluation)) => tracing::info!(
                 machine = %machine,
                 switched = evaluation.switched,
@@ -148,12 +153,15 @@ async fn trigger_with_limit(
 
 /// Run a full evaluation for `machine`. The caller must already hold the
 /// evaluation slot from `begin_auto`; this records progress and releases it.
+/// `manual` decides how the probes are labelled on the wire: a person asked for
+/// this one, so devices that only serve manual measurements answer it.
 pub async fn evaluate_locked(
     state: &AppState,
     machine: &str,
     candidate_limit: Option<usize>,
+    manual: bool,
 ) -> ApiResult<Option<Evaluation>> {
-    let result = evaluate_machine(state, machine, candidate_limit).await;
+    let result = evaluate_machine(state, machine, candidate_limit, manual).await;
 
     match &result {
         Ok(Some(evaluation)) => {
@@ -193,6 +201,7 @@ pub async fn evaluate_machine(
     state: &AppState,
     machine: &str,
     candidate_limit: Option<usize>,
+    manual: bool,
 ) -> ApiResult<Option<Evaluation>> {
     if !state.registry().is_connected(machine).await {
         return Ok(None);
@@ -226,7 +235,7 @@ pub async fn evaluate_machine(
             let done = done.clone();
             async move {
                 let (latency_ms, ranked) =
-                    match service::probe(&state, &machine, &tag, "latency", true).await {
+                    match service::probe(&state, &machine, &tag, "latency", !manual).await {
                         Ok(probe) => (
                             probe.latency_ms,
                             probe.latency_ms.map(|latency_ms| (tag.clone(), latency_ms)),
@@ -294,7 +303,7 @@ pub async fn evaluate_machine(
         state
             .update_evaluation(machine, "bandwidth", index, total_candidates, Some(tag))
             .await;
-        match service::probe(state, machine, tag, "both", true).await {
+        match service::probe(state, machine, tag, "both", !manual).await {
             Ok(probe) => {
                 let latency_ms = probe.latency_ms.or_else(|| baseline.get(tag).copied());
                 let score = state
@@ -403,7 +412,7 @@ pub async fn evaluate_machine(
             .update_evaluation(machine, "verify", index, max_checks, Some(tag))
             .await;
 
-        match service::probe(state, machine, tag, "egress", true).await {
+        match service::probe(state, machine, tag, "egress", !manual).await {
             Ok(check) if check.latency_ms.is_some() => {
                 chosen = Some((tag.clone(), *score));
                 break;

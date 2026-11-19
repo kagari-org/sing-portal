@@ -13,6 +13,9 @@ use sing_portal_core::protocol::{AgentMessage, ServerMessage};
 use sing_portal_core::render::SELECTOR_TAG;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use url::Url;
 
 use api::BoxApi;
@@ -96,7 +99,16 @@ impl Agent {
 
     async fn session(&self) -> Result<()> {
         let url = websocket_url(&self.config.portal_url)?;
-        let (socket, _) = tokio_tungstenite::connect_async(url.as_str())
+        let mut request = url
+            .as_str()
+            .into_client_request()
+            .map_err(|error| AgentError::Portal(error.to_string()))?;
+        if let Some(token) = self.config.token.as_deref() {
+            let value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|error| AgentError::Portal(error.to_string()))?;
+            request.headers_mut().insert(AUTHORIZATION, value);
+        }
+        let (socket, _) = tokio_tungstenite::connect_async(request)
             .await
             .map_err(|error| AgentError::Portal(error.to_string()))?;
         let (mut sink, mut stream) = socket.split();

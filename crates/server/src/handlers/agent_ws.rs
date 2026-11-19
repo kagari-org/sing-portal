@@ -1,9 +1,13 @@
 use std::time::Duration;
 
+use axum::Json;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::Response;
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use sing_portal_core::protocol::{AgentMessage, ServerMessage};
 use sing_portal_core::render::AUTO_TAG;
 use sing_portal_store::NodeReport;
@@ -12,8 +16,37 @@ use tokio::sync::mpsc;
 use crate::service;
 use crate::state::AppState;
 
-pub async fn upgrade(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
+pub async fn upgrade(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Bearer")],
+            Json(json!({ "error": "missing or invalid agent token" })),
+        )
+            .into_response();
+    }
+
     upgrade.on_upgrade(move |socket| supervise(state, socket))
+}
+
+/// An unset token leaves the endpoint open, matching the single-port default.
+fn authorized(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(expected) = state.config().agent_token.as_deref() else {
+        return true;
+    };
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| token_matches(token, expected))
+}
+
+fn token_matches(presented: &str, expected: &str) -> bool {
+    Sha256::digest(presented.as_bytes()) == Sha256::digest(expected.as_bytes())
 }
 
 async fn supervise(state: AppState, socket: WebSocket) {

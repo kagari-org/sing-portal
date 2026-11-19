@@ -25,6 +25,28 @@ use tower_http::trace::TraceLayer;
 use crate::handlers::{agent_ws, api, assets, events, nodes, providers, subscriptions};
 
 pub fn router(state: AppState) -> Router {
+    let routes = if state.config().agent_listen.is_none() {
+        api_routes().merge(agent_routes())
+    } else {
+        api_routes()
+    };
+
+    routes
+        .fallback(assets::handler)
+        .layer(middleware::from_fn(write_guard))
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
+}
+
+/// The agent endpoint on its own listener: an allowlist of the one route an
+/// agent needs, so nothing else can reach an exposed port.
+pub fn agent_router(state: AppState) -> Router {
+    agent_routes()
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
+}
+
+fn api_routes() -> Router<AppState> {
     Router::new()
         .route("/api/healthz", get(api::healthz))
         .route("/api/revision", get(api::revision))
@@ -53,18 +75,30 @@ pub fn router(state: AppState) -> Router {
         .route("/api/nodes/{name}/mode", put(nodes::set_mode))
         .route("/api/nodes/{name}/measurements", get(nodes::measurements))
         .route("/api/nodes/{name}/evaluation", get(nodes::evaluation))
-        .route("/api/v1/agent/ws", get(agent_ws::upgrade))
-        .fallback(assets::handler)
-        .layer(middleware::from_fn(write_guard))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+}
+
+fn agent_routes() -> Router<AppState> {
+    Router::new().route("/api/v1/agent/ws", get(agent_ws::upgrade))
 }
 
 pub async fn serve(state: AppState) -> std::io::Result<()> {
     let listen = state.config().listen;
-    let listener = tokio::net::TcpListener::bind(listen).await?;
+    let Some(agent_listen) = state.config().agent_listen else {
+        let listener = tokio::net::TcpListener::bind(listen).await?;
+        tracing::info!(%listen, "sing-portal listening");
+        return axum::serve(listener, router(state)).await;
+    };
+
+    let admin = tokio::net::TcpListener::bind(listen).await?;
+    let agent = tokio::net::TcpListener::bind(agent_listen).await?;
     tracing::info!(%listen, "sing-portal listening");
-    axum::serve(listener, router(state)).await
+    tracing::info!(listen = %agent_listen, "agent endpoint listening");
+
+    tokio::try_join!(
+        axum::serve(admin, router(state.clone())),
+        axum::serve(agent, agent_router(state)),
+    )?;
+    Ok(())
 }
 
 async fn write_guard(request: Request, next: Next) -> Response {

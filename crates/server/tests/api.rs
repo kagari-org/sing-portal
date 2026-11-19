@@ -7,10 +7,13 @@ use futures_util::{SinkExt, StreamExt};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use sing_portal_core::protocol::{AgentMessage, ServerMessage};
-use sing_portal_server::{AppState, ServerConfig, router};
+use sing_portal_server::{AppState, ServerConfig, agent_router, router};
 use sing_portal_store::Measurement;
 use tempfile::TempDir;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tower::ServiceExt;
 
 struct TestApp {
@@ -23,6 +26,14 @@ async fn app() -> TestApp {
 }
 
 async fn app_with_candidates(auto_candidates: usize) -> TestApp {
+    app_with_agent(auto_candidates, None, None).await
+}
+
+async fn app_with_agent(
+    auto_candidates: usize,
+    agent_listen: Option<std::net::SocketAddr>,
+    agent_token: Option<String>,
+) -> TestApp {
     let dir = TempDir::new().unwrap();
     let static_dir = dir.path().join("web");
     std::fs::create_dir_all(&static_dir).unwrap();
@@ -37,6 +48,8 @@ async fn app_with_candidates(auto_candidates: usize) -> TestApp {
         fetch_max_bytes: 1024 * 1024,
         static_dir: Some(static_dir),
         embed_web: false,
+        agent_listen,
+        agent_token,
         auto_interval: Duration::from_secs(600),
         auto_candidates,
         auto_margin: 0.15,
@@ -977,4 +990,90 @@ async fn degraded_egress_status_starts_a_recovery_evaluation() {
     assert!(started, "watchdog should start a recovery evaluation");
 
     server.abort();
+}
+
+#[tokio::test]
+async fn agent_ws_requires_the_configured_token() {
+    let app = app_with_agent(5, None, Some("s3cret".into())).await;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let state = app.state.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router(state)).await.unwrap();
+    });
+
+    let url = format!("ws://{address}/api/v1/agent/ws");
+    assert!(
+        tokio_tungstenite::connect_async(url.as_str())
+            .await
+            .is_err(),
+        "a missing token must fail the handshake"
+    );
+    assert!(
+        tokio_tungstenite::connect_async(with_bearer(&url, "wrong"))
+            .await
+            .is_err(),
+        "a wrong token must fail the handshake"
+    );
+
+    let (mut socket, _) = tokio_tungstenite::connect_async(with_bearer(&url, "s3cret"))
+        .await
+        .expect("the configured token must be accepted");
+    socket
+        .send(Message::Text(
+            serde_json::to_string(&AgentMessage::Hello {
+                name: "home".into(),
+                version: "test".into(),
+            })
+            .unwrap()
+            .into(),
+        ))
+        .await
+        .unwrap();
+
+    let frame = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(frame, Message::Text(_)));
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn agent_listener_serves_only_the_agent_route() {
+    let app = app_with_agent(5, Some("127.0.0.1:0".parse().unwrap()), None).await;
+
+    let response = agent_router(app.state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/revision")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = agent_router(app.state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agent/ws")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+fn with_bearer(url: &str, token: &str) -> tokio_tungstenite::tungstenite::http::Request<()> {
+    let mut request = url.into_client_request().unwrap();
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+    );
+    request
 }

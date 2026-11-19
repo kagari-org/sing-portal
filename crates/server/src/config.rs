@@ -14,6 +14,10 @@ pub struct ServerConfig {
     pub fetch_max_bytes: usize,
     pub static_dir: Option<PathBuf>,
     pub embed_web: bool,
+    /// Separate listener for the agent endpoint. When unset the agent route
+    /// stays on `listen`.
+    pub agent_listen: Option<SocketAddr>,
+    pub agent_token: Option<String>,
     pub auto_interval: Duration,
     pub auto_candidates: usize,
     pub auto_margin: f64,
@@ -31,6 +35,8 @@ impl Default for ServerConfig {
             fetch_max_bytes: 8 * 1024 * 1024,
             static_dir: None,
             embed_web: true,
+            agent_listen: None,
+            agent_token: None,
             auto_interval: Duration::from_secs(2 * 3600),
             auto_candidates: 6,
             auto_margin: 0.15,

@@ -12,6 +12,7 @@ reqwest.workspace = true
 rust-embed.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sing-portal-core.workspace = true
 sing-portal-store.workspace = true
 tempfile.workspace = true

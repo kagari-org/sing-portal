@@ -12,6 +12,7 @@ fn config(dir: &TempDir, template: &Value) -> AgentConfig {
     AgentConfig {
         portal_url: String::new(),
         node_name: "home".into(),
+        token: None,
         template_path,
         config_path: dir.path().join("config.json"),
         state_dir: dir.path().join("state"),

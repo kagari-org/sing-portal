@@ -7,6 +7,7 @@ use crate::tester::TesterConfig;
 pub struct AgentConfig {
     pub portal_url: String,
     pub node_name: String,
+    pub token: Option<String>,
     pub template_path: PathBuf,
     pub config_path: PathBuf,
     pub state_dir: PathBuf,

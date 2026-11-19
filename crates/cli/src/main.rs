@@ -51,6 +51,12 @@ struct ServeArgs {
     #[arg(long, env = "SING_PORTAL_STATIC_DIR")]
     static_dir: Option<PathBuf>,
 
+    #[arg(long, env = "SING_PORTAL_AGENT_LISTEN")]
+    agent_listen: Option<SocketAddr>,
+
+    #[arg(long, env = "SING_PORTAL_AGENT_TOKEN")]
+    agent_token: Option<String>,
+
     #[arg(long, env = "SING_PORTAL_AUTO_INTERVAL", default_value = "2h")]
     auto_interval: String,
 
@@ -77,6 +83,9 @@ struct AgentArgs {
 
     #[arg(long = "name", env = "SING_PORTAL_NODE")]
     node: String,
+
+    #[arg(long, env = "SING_PORTAL_TOKEN")]
+    token: Option<String>,
 
     #[arg(long, env = "SING_PORTAL_TEMPLATE")]
     template: PathBuf,
@@ -214,6 +223,8 @@ async fn serve(args: ServeArgs) -> Result<()> {
         fetch_max_bytes: args.fetch_max_bytes,
         static_dir: args.static_dir,
         embed_web: true,
+        agent_listen: args.agent_listen,
+        agent_token: args.agent_token,
         auto_interval: parse_duration(&args.auto_interval).map_err(anyhow::Error::msg)?,
         auto_candidates: args.auto_candidates,
         auto_margin: args.auto_margin,
@@ -241,6 +252,7 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
     let config = AgentConfig {
         portal_url: args.portal,
         node_name: args.node,
+        token: args.token,
         template_path: args.template,
         config_path: args.config,
         state_dir: args.state_dir.clone(),

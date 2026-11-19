@@ -85,6 +85,7 @@ async fn syncs_state_over_websocket() {
     let config = AgentConfig {
         portal_url: String::new(),
         node_name: "home".into(),
+        token: None,
         template_path,
         config_path,
         state_dir: state_dir.clone(),
@@ -202,6 +203,7 @@ async fn minimal_config() -> (AgentConfig, TempDir) {
     let config = AgentConfig {
         portal_url: String::new(),
         node_name: "home".into(),
+        token: None,
         template_path: path,
         config_path: dir.path().join("config.json"),
         state_dir: dir.path().join("state"),

@@ -97,7 +97,7 @@
         '';
         meta = {
           description = "sing-box subscription portal and node agent";
-          mainProgram = "sing-portal";
+          mainProgram = "sing-portal-server";
         };
       };
 

@@ -1,10 +1,13 @@
 mod common;
 
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use sing_portal_agent::{Agent, AgentConfig};
+use sing_portal_agent::state::LocalState;
+use sing_portal_agent::{Agent, AgentConfig, Host, HostError, HostResult};
 use sing_portal_core::protocol::{AgentMessage, ServerMessage};
 use sing_portal_core::render::render;
 use tempfile::TempDir;
@@ -16,6 +19,76 @@ const TEMPLATE: &str = r#"{
   "log": { "level": "warn" },
   "route": { "final": "s_out" }
 }"#;
+
+/// The same side effects the desktop binary performs: a config file sing-box
+/// reads and a command that reloads it.
+struct TestHost {
+    config_path: PathBuf,
+    state_path: PathBuf,
+    restart: Option<String>,
+}
+
+impl TestHost {
+    fn new(config_path: PathBuf, state_path: PathBuf, restart: Option<String>) -> Self {
+        Self {
+            config_path,
+            state_path,
+            restart,
+        }
+    }
+
+    fn written(&self) -> Value {
+        serde_json::from_slice(&std::fs::read(&self.config_path).unwrap()).unwrap()
+    }
+}
+
+impl Host for TestHost {
+    fn write_config(&self, config: &[u8]) -> HostResult<()> {
+        write_atomic(&self.config_path, config)
+    }
+
+    fn has_config(&self) -> bool {
+        self.config_path.exists()
+    }
+
+    fn restart(&self) -> HostResult<()> {
+        let Some(command) = self.restart.as_deref() else {
+            return Ok(());
+        };
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .output()?;
+        if !output.status.success() {
+            return Err(HostError::new(format!(
+                "restart command failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
+
+    fn load_state(&self) -> Option<LocalState> {
+        let bytes = std::fs::read(&self.state_path).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    fn save_state(&self, state: &LocalState) -> HostResult<()> {
+        write_atomic(&self.state_path, &serde_json::to_vec_pretty(state)?)
+    }
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> HostResult<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("tmp");
+    std::fs::write(&temporary, bytes)?;
+    std::fs::rename(&temporary, path)?;
+    Ok(())
+}
 
 fn outbounds() -> Value {
     json!([
@@ -69,8 +142,6 @@ async fn syncs_state_over_websocket() {
         ]);
         template
     };
-    let template_path = dir.path().join("template.json");
-    std::fs::write(&template_path, serde_json::to_vec(&template).unwrap()).unwrap();
 
     let run = common::start(dir.path(), api_port, &{
         let mut initial = render(&template, &[], &test_url).unwrap();
@@ -82,16 +153,19 @@ async fn syncs_state_over_websocket() {
     let pid = box_child.id().unwrap();
     let config_path = config_dir.join("config.json");
 
+    let host = Arc::new(TestHost::new(
+        config_path.clone(),
+        state_dir.join("state.json"),
+        Some(format!("kill -HUP {pid}")),
+    ));
+
     let config = AgentConfig {
         portal_url: String::new(),
         node_name: "home".into(),
         token: None,
-        template_path,
-        config_path,
-        state_dir: state_dir.clone(),
+        template: serde_json::to_string(&template).unwrap(),
         api_url: format!("http://127.0.0.1:{api_port}"),
         latency_url: test_url.clone(),
-        restart_cmd: Some(format!("kill -HUP {pid}")),
         interval: Duration::from_secs(15),
         once: true,
         best_effort: false,
@@ -135,7 +209,7 @@ async fn syncs_state_over_websocket() {
 
     let mut config = config;
     config.portal_url = format!("http://{address}");
-    let agent = Agent::new(config.clone()).unwrap();
+    let agent = Agent::new(config.clone(), host.clone()).unwrap();
     agent.run().await.unwrap();
 
     let reply = server.await.unwrap();
@@ -165,8 +239,7 @@ async fn syncs_state_over_websocket() {
     assert!(applied);
     assert!(error.is_empty());
 
-    let written: Value =
-        serde_json::from_slice(&std::fs::read(&config.config_path).unwrap()).unwrap();
+    let written = host.written();
     assert_eq!(written["outbounds"][0]["tag"], "s_out");
 
     let api = sing_portal_agent::api::BoxApi::new(&config.api_url, Duration::from_secs(5)).unwrap();
@@ -183,33 +256,33 @@ async fn once_is_best_effort_when_portal_is_down() {
         listener.local_addr().unwrap()
     };
 
-    let (mut config, _dir) = minimal_config().await;
+    let (mut config, host) = minimal_config();
     config.portal_url = format!("http://{closed}");
     config.best_effort = true;
-    let agent = Agent::new(config).unwrap();
+    let agent = Agent::new(config, host.clone()).unwrap();
     assert!(agent.run().await.is_ok());
 
-    let (mut config, _dir2) = minimal_config().await;
+    let (mut config, host) = minimal_config();
     config.portal_url = format!("http://{closed}");
     config.best_effort = false;
-    let agent = Agent::new(config).unwrap();
+    let agent = Agent::new(config, host).unwrap();
     assert!(agent.run().await.is_err());
 }
 
-async fn minimal_config() -> (AgentConfig, TempDir) {
+fn minimal_config() -> (AgentConfig, Arc<TestHost>) {
     let dir = TempDir::new().unwrap();
-    let path = dir.path().join("template.json");
-    std::fs::write(&path, TEMPLATE).unwrap();
+    let host = Arc::new(TestHost::new(
+        dir.path().join("config.json"),
+        dir.path().join("state.json"),
+        None,
+    ));
     let config = AgentConfig {
         portal_url: String::new(),
         node_name: "home".into(),
         token: None,
-        template_path: path,
-        config_path: dir.path().join("config.json"),
-        state_dir: dir.path().join("state"),
+        template: TEMPLATE.into(),
         api_url: "http://127.0.0.1:1".into(),
         latency_url: "http://127.0.0.1:1/".into(),
-        restart_cmd: None,
         interval: Duration::from_secs(15),
         once: true,
         best_effort: false,
@@ -223,5 +296,5 @@ async fn minimal_config() -> (AgentConfig, TempDir) {
             ..sing_portal_agent::tester::TesterConfig::default()
         },
     };
-    (config, dir)
+    (config, host)
 }

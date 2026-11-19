@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::tester::TesterConfig;
@@ -8,12 +7,10 @@ pub struct AgentConfig {
     pub portal_url: String,
     pub node_name: String,
     pub token: Option<String>,
-    pub template_path: PathBuf,
-    pub config_path: PathBuf,
-    pub state_dir: PathBuf,
+    /// The sing-box template as JSON text; the host owns where it lives.
+    pub template: String,
     pub api_url: String,
     pub latency_url: String,
-    pub restart_cmd: Option<String>,
     pub interval: Duration,
     pub once: bool,
     pub best_effort: bool,
@@ -21,18 +18,4 @@ pub struct AgentConfig {
     pub egress_health_interval: Duration,
     pub egress_health_failures: u32,
     pub tester: TesterConfig,
-}
-
-impl AgentConfig {
-    pub fn outbounds_path(&self) -> PathBuf {
-        self.state_dir.join("outbounds.json")
-    }
-
-    pub fn outbounds_previous_path(&self) -> PathBuf {
-        self.state_dir.join("outbounds.prev.json")
-    }
-
-    pub fn local_state_path(&self) -> PathBuf {
-        self.state_dir.join("state.json")
-    }
 }

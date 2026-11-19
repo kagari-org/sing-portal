@@ -1890,17 +1890,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "sing-portal-cli"
+name = "sing-portal-agent-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "serde_json",
  "sing-portal-agent",
  "sing-portal-core",
- "sing-portal-server",
- "sing-portal-store",
  "tokio",
- "tracing",
  "tracing-subscriber",
 ]
 
@@ -1945,6 +1943,18 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "sing-portal-server-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "sing-portal-core",
+ "sing-portal-server",
+ "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]

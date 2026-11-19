@@ -1,3 +1,5 @@
+pub use sing_portal_core::parse_duration;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -42,27 +44,6 @@ impl Default for ServerConfig {
             auto_margin: 0.15,
             score: sing_portal_core::score::ScoreConfig::default(),
         }
-    }
-}
-
-pub fn parse_duration(value: &str) -> Result<Duration, String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err("duration is empty".into());
-    }
-    let (number, unit) = value.split_at(value.len() - 1);
-    if let Ok(seconds) = value.parse::<u64>() {
-        return Ok(Duration::from_secs(seconds));
-    }
-    let seconds = number
-        .parse::<u64>()
-        .map_err(|_| format!("invalid duration `{value}`"))?;
-    match unit {
-        "s" => Ok(Duration::from_secs(seconds)),
-        "m" => Ok(Duration::from_secs(seconds * 60)),
-        "h" => Ok(Duration::from_secs(seconds * 3600)),
-        "d" => Ok(Duration::from_secs(seconds * 86400)),
-        other => Err(format!("unknown duration unit `{other}`")),
     }
 }
 

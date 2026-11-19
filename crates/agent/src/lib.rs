@@ -2,6 +2,7 @@ pub mod api;
 pub mod apply;
 pub mod config;
 pub mod error;
+pub mod host;
 pub mod state;
 pub mod tester;
 
@@ -21,6 +22,7 @@ use url::Url;
 use api::BoxApi;
 pub use config::AgentConfig;
 pub use error::{AgentError, Result};
+pub use host::{Host, HostError, HostResult};
 
 const RENDERER_VERSION: u32 = 6;
 use tester::{Kind, Tester};
@@ -33,17 +35,19 @@ struct EgressHealth {
 
 pub struct Agent {
     config: AgentConfig,
+    host: Arc<dyn Host>,
     api: BoxApi,
     tester: Tester,
     egress_health: Arc<Mutex<EgressHealth>>,
 }
 
 impl Agent {
-    pub fn new(config: AgentConfig) -> Result<Self> {
+    pub fn new(config: AgentConfig, host: Arc<dyn Host>) -> Result<Self> {
         let api = BoxApi::new(&config.api_url, Duration::from_secs(5))?;
         let tester = Tester::new(config.tester.clone(), api.clone());
         Ok(Self {
             config,
+            host,
             api,
             tester,
             egress_health: Arc::new(Mutex::new(EgressHealth::default())),
@@ -83,16 +87,13 @@ impl Agent {
     }
 
     async fn ensure_config(&self) {
-        if tokio::fs::try_exists(&self.config.config_path)
-            .await
-            .unwrap_or(false)
-        {
+        if self.host.has_config() {
             return;
         }
-        let Ok(bytes) = apply::render_bytes(&self.config, &[]).await else {
+        let Ok(bytes) = apply::render_bytes(&self.config, &[]) else {
             return;
         };
-        if let Err(error) = state::write_atomic(&self.config.config_path, &bytes).await {
+        if let Err(error) = self.host.write_config(&bytes) {
             tracing::warn!(%error, "cannot write the initial config");
         }
     }
@@ -262,26 +263,21 @@ impl Agent {
         selection: String,
         outbounds: Vec<serde_json::Value>,
     ) -> AgentMessage {
-        let mut local = state::load(&self.config.local_state_path()).await;
+        let mut local = self.host.load_state().unwrap_or_default();
         let mut health = "ok".to_string();
         let mut error = String::new();
         let mut applied = false;
 
         let empty = revision == "none" || outbounds.is_empty();
-        let config_missing = !tokio::fs::try_exists(&self.config.config_path)
-            .await
-            .unwrap_or(false);
+        let config_missing = !self.host.has_config();
         // the rendered config embeds the latency url; re-render when it changes
         let latency_url_changed = local.applied_latency_url != self.config.latency_url;
         // the agent controls parts of the rendered config (test inbound), so a
         // renderer change must be re-applied even when the revision is stable
         let renderer_changed = local.applied_renderer_version != RENDERER_VERSION;
         // templates carry defaults that are not part of the portal revision
-        let template_hash = apply::template_fingerprint(&self.config)
-            .await
-            .unwrap_or_default();
-        let template_changed =
-            !template_hash.is_empty() && local.applied_template_hash != template_hash;
+        let template_hash = apply::template_fingerprint(&self.config);
+        let template_changed = local.applied_template_hash != template_hash;
         if empty {
             health = "no_active_subscriptions".to_string();
         } else if revision != local.applied_revision
@@ -290,12 +286,14 @@ impl Agent {
             || renderer_changed
             || template_changed
         {
-            match apply::apply(&self.config, &outbounds, &self.api).await {
-                Ok(()) => {
+            let previous = local.previous_config.as_deref();
+            match apply::apply(&self.host, &self.config, &outbounds, &self.api, previous).await {
+                Ok(rendered) => {
                     local.applied_revision = revision.clone();
                     local.applied_latency_url = self.config.latency_url.clone();
                     local.applied_renderer_version = RENDERER_VERSION;
                     local.applied_template_hash = template_hash;
+                    local.previous_config = Some(rendered);
                     applied = true;
                 }
                 Err(apply_error) => {
@@ -320,7 +318,7 @@ impl Agent {
 
         local.last_error = error.clone();
         local.updated_at = unix_now();
-        if let Err(save_error) = state::save(&self.config.local_state_path(), &local).await {
+        if let Err(save_error) = self.host.save_state(&local) {
             tracing::warn!(%save_error, "cannot persist agent state");
         }
 
@@ -335,7 +333,7 @@ impl Agent {
     }
 
     async fn status(&self) -> AgentMessage {
-        let local = state::load(&self.config.local_state_path()).await;
+        let local = self.host.load_state().unwrap_or_default();
         let selection = self
             .api
             .current_selection()

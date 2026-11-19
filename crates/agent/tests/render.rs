@@ -5,20 +5,14 @@ use sing_portal_agent::AgentConfig;
 use sing_portal_agent::apply::{render_bytes, template_fingerprint};
 use tempfile::TempDir;
 
-fn config(dir: &TempDir, template: &Value) -> AgentConfig {
-    let template_path = dir.path().join("template.json");
-    std::fs::write(&template_path, serde_json::to_vec(template).unwrap()).unwrap();
-
+fn config(template: &Value) -> AgentConfig {
     AgentConfig {
         portal_url: String::new(),
         node_name: "home".into(),
         token: None,
-        template_path,
-        config_path: dir.path().join("config.json"),
-        state_dir: dir.path().join("state"),
+        template: serde_json::to_string(template).unwrap(),
         api_url: "http://127.0.0.1:1".into(),
         latency_url: "https://cp.cloudflare.com/generate_204".into(),
-        restart_cmd: None,
         interval: Duration::from_secs(15),
         once: true,
         best_effort: false,
@@ -29,9 +23,8 @@ fn config(dir: &TempDir, template: &Value) -> AgentConfig {
     }
 }
 
-#[tokio::test]
-async fn renders_test_and_egress_probe_rules() {
-    let dir = TempDir::new().unwrap();
+#[test]
+fn renders_test_and_egress_probe_rules() {
     let template = json!({
         "log": { "level": "warn" },
         "dns": {
@@ -47,17 +40,14 @@ async fn renders_test_and_egress_probe_rules() {
             "rules": [ { "action": "sniff" } ]
         }
     });
-    let agent = config(&dir, &template);
+    let agent = config(&template);
     let outbounds = json!([
         { "type": "socks", "tag": "node-a", "server": "127.0.0.1", "server_port": 1 }
     ]);
 
-    let rendered: Value = serde_json::from_slice(
-        &render_bytes(&agent, outbounds.as_array().unwrap())
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let rendered: Value =
+        serde_json::from_slice(&render_bytes(&agent, outbounds.as_array().unwrap()).unwrap())
+            .unwrap();
 
     let inbound_tags: Vec<&str> = rendered["inbounds"]
         .as_array()
@@ -104,6 +94,7 @@ async fn renders_test_and_egress_probe_rules() {
     assert!(selectors.contains(&"s_test"));
 
     if let Some(bin) = std::env::var_os("SING_BOX_BIN").filter(|path| !path.is_empty()) {
+        let dir = TempDir::new().unwrap();
         let path = dir.path().join("rendered.json");
         std::fs::write(&path, serde_json::to_vec(&rendered).unwrap()).unwrap();
         let output = std::process::Command::new(bin)
@@ -120,15 +111,14 @@ async fn renders_test_and_egress_probe_rules() {
     }
 }
 
-#[tokio::test]
-async fn template_fingerprint_tracks_template_content() {
-    let dir = TempDir::new().unwrap();
-    let agent = config(&dir, &json!({ "log": { "level": "warn" } }));
+#[test]
+fn template_fingerprint_tracks_template_content() {
+    let agent = config(&json!({ "log": { "level": "warn" } }));
 
-    let first = template_fingerprint(&agent).await.unwrap();
-    assert_eq!(first, template_fingerprint(&agent).await.unwrap());
+    let first = template_fingerprint(&agent);
+    assert_eq!(first, template_fingerprint(&agent));
 
-    std::fs::write(&agent.template_path, br#"{"log":{"level":"info"}}"#).unwrap();
-    let changed = template_fingerprint(&agent).await.unwrap();
-    assert_ne!(first, changed);
+    let mut changed = agent.clone();
+    changed.template = r#"{"log":{"level":"info"}}"#.into();
+    assert_ne!(first, template_fingerprint(&changed));
 }

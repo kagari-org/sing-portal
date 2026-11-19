@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -5,67 +6,78 @@ use sha2::{Digest, Sha256};
 use sing_portal_core::model::{is_proxy_outbound, outbound_tag};
 use sing_portal_core::render::{
     AUTO_TAG, DIRECT_TAG, EGRESS_INBOUND_TAG, HEALTH_INBOUND_TAG, PROBE_DNS_TAG, SELECTOR_TAG,
-    TEST_INBOUND_TAG, TEST_SELECTOR, render, to_bytes,
+    TEST_INBOUND_TAG, TEST_SELECTOR, render,
 };
 
 use crate::api::BoxApi;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
-use crate::state;
+use crate::host::Host;
+use crate::tester::TesterConfig;
 
-pub async fn apply(config: &AgentConfig, outbounds: &[Value], api: &BoxApi) -> Result<()> {
-    let outbounds_path = config.outbounds_path();
-    if tokio::fs::try_exists(&outbounds_path)
-        .await
-        .unwrap_or(false)
-    {
-        tokio::fs::copy(&outbounds_path, config.outbounds_previous_path()).await?;
-    }
-    state::write_atomic(&outbounds_path, &serde_json::to_vec_pretty(outbounds)?).await?;
+pub fn render_text(config: &AgentConfig, outbounds: &[Value]) -> Result<String> {
+    let template: Value = serde_json::from_str(&config.template)?;
+    let mut rendered = render(&template, outbounds, &config.latency_url)?;
+    inject_test(&mut rendered, &config.tester, outbounds)?;
+    let mut text = serde_json::to_string_pretty(&rendered)?;
+    text.push('\n');
+    Ok(text)
+}
 
-    let bytes = render_bytes(config, outbounds).await?;
-    state::write_atomic(&config.config_path, &bytes).await?;
+pub fn render_bytes(config: &AgentConfig, outbounds: &[Value]) -> Result<Vec<u8>> {
+    Ok(render_text(config, outbounds)?.into_bytes())
+}
 
-    if let Err(error) = restart(config).await {
-        if let Err(rollback_error) = rollback(config, api).await {
+pub fn template_fingerprint(config: &AgentConfig) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(config.template.as_bytes());
+    format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+/// Writes a config, restarts sing-box and waits for the api to answer. Returns
+/// the text that came up healthy so the caller can keep it for the next
+/// rollback.
+pub async fn apply(
+    host: &Arc<dyn Host>,
+    config: &AgentConfig,
+    outbounds: &[Value],
+    api: &BoxApi,
+    previous: Option<&str>,
+) -> Result<String> {
+    let rendered = render_text(config, outbounds)?;
+
+    if let Err(error) = install(host, config, api, &rendered).await {
+        if let Some(previous) = previous
+            && let Err(rollback_error) = install(host, config, api, previous).await
+        {
             tracing::warn!(%rollback_error, "rollback failed");
         }
         return Err(error);
     }
 
-    match wait_healthy(config, api).await {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            if let Err(rollback_error) = rollback(config, api).await {
-                tracing::warn!(%rollback_error, "rollback failed");
-            }
-            Err(error)
-        }
-    }
+    Ok(rendered)
 }
 
-async fn restart(config: &AgentConfig) -> Result<()> {
-    let Some(command) = config
-        .restart_cmd
-        .as_deref()
-        .filter(|command| !command.is_empty())
-    else {
-        return Ok(());
-    };
+async fn install(
+    host: &Arc<dyn Host>,
+    config: &AgentConfig,
+    api: &BoxApi,
+    text: &str,
+) -> Result<()> {
+    let writer = host.clone();
+    let bytes = text.as_bytes().to_vec();
+    tokio::task::spawn_blocking(move || writer.write_config(&bytes))
+        .await
+        .map_err(|error| AgentError::Host(error.to_string()))?
+        .map_err(|error| AgentError::Host(error.to_string()))?;
 
-    let output = tokio::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(command)
-        .output()
-        .await?;
+    let restarter = host.clone();
+    tokio::task::spawn_blocking(move || restarter.restart())
+        .await
+        .map_err(|error| AgentError::Host(error.to_string()))?
+        .map_err(|error| AgentError::Host(error.to_string()))?;
 
-    if !output.status.success() {
-        return Err(AgentError::Restart(format!(
-            "restart command failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(())
+    wait_healthy(config, api).await
 }
 
 async fn wait_healthy(config: &AgentConfig, api: &BoxApi) -> Result<()> {
@@ -96,48 +108,12 @@ async fn wait_healthy(config: &AgentConfig, api: &BoxApi) -> Result<()> {
     }
 }
 
-async fn rollback(config: &AgentConfig, api: &BoxApi) -> Result<()> {
-    let previous = config.outbounds_previous_path();
-    if !tokio::fs::try_exists(&previous).await.unwrap_or(false) {
-        return Err(AgentError::Rollback(
-            "no previous outbounds to roll back to".into(),
-        ));
-    }
-
-    let outbounds: Value = serde_json::from_slice(&tokio::fs::read(&previous).await?)?;
-    let outbounds = outbounds.as_array().cloned().unwrap_or_default();
-    state::write_atomic(
-        &config.outbounds_path(),
-        &serde_json::to_vec_pretty(&outbounds)?,
-    )
-    .await?;
-    let bytes = render_bytes(config, &outbounds).await?;
-    state::write_atomic(&config.config_path, &bytes).await?;
-    restart(config).await?;
-    wait_healthy(config, api).await
-}
-
-pub async fn template_fingerprint(config: &AgentConfig) -> Result<String> {
-    let bytes = tokio::fs::read(&config.template_path).await?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
-}
-
-pub async fn render_bytes(config: &AgentConfig, outbounds: &[Value]) -> Result<Vec<u8>> {
-    let template_bytes = tokio::fs::read(&config.template_path).await?;
-    let template: Value = serde_json::from_slice(&template_bytes)?;
-    let mut rendered = render(&template, outbounds, &config.latency_url)?;
-    inject_test(&mut rendered, config, outbounds)?;
-    Ok(to_bytes(&rendered))
-}
-
 /// The bandwidth probe dials its own inbound with the test selector selected,
 /// so it never touches the real egress selector. The egress probe uses a
 /// second inbound routed to `s_test`, with a dedicated DNS server detouring
 /// through the same selector. The portal can therefore verify a candidate
 /// (including DNS) while `s_out` stays untouched, and switch only once.
-fn inject_test(config: &mut Value, agent: &AgentConfig, outbounds: &[Value]) -> Result<()> {
+fn inject_test(config: &mut Value, tester: &TesterConfig, outbounds: &[Value]) -> Result<()> {
     let tags: Vec<Value> = outbounds
         .iter()
         .filter(|outbound| is_proxy_outbound(outbound))
@@ -195,24 +171,24 @@ fn inject_test(config: &mut Value, agent: &AgentConfig, outbounds: &[Value]) -> 
             array.push(json!({
                 "type": "mixed",
                 "tag": TEST_INBOUND_TAG,
-                "listen": agent.tester.inbound.ip().to_string(),
-                "listen_port": agent.tester.inbound.port(),
+                "listen": tester.inbound.ip().to_string(),
+                "listen_port": tester.inbound.port(),
             }));
         }
         if !present(array, EGRESS_INBOUND_TAG) {
             array.push(json!({
                 "type": "mixed",
                 "tag": EGRESS_INBOUND_TAG,
-                "listen": agent.tester.egress_inbound.ip().to_string(),
-                "listen_port": agent.tester.egress_inbound.port(),
+                "listen": tester.egress_inbound.ip().to_string(),
+                "listen_port": tester.egress_inbound.port(),
             }));
         }
         if !present(array, HEALTH_INBOUND_TAG) {
             array.push(json!({
                 "type": "mixed",
                 "tag": HEALTH_INBOUND_TAG,
-                "listen": agent.tester.health_inbound.ip().to_string(),
-                "listen_port": agent.tester.health_inbound.port(),
+                "listen": tester.health_inbound.ip().to_string(),
+                "listen_port": tester.health_inbound.port(),
             }));
         }
     }

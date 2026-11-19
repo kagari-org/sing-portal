@@ -1,20 +1,17 @@
 [package]
-name = "sing-portal-cli"
+name = "sing-portal-server-cli"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "sing-portal"
+name = "sing-portal-server"
 path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-sing-portal-agent.workspace = true
 sing-portal-core.workspace = true
 sing-portal-server.workspace = true
-sing-portal-store.workspace = true
 tokio.workspace = true
-tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -10,6 +10,8 @@ pub enum AgentError {
     BoxApi(String),
     #[error("restart failed: {0}")]
     Restart(String),
+    #[error("host: {0}")]
+    Host(String),
     #[error("rollback failed: {0}")]
     Rollback(String),
     #[error("sing-box did not become healthy within timeout")]

@@ -19,7 +19,12 @@ async fn talks_to_the_sing_box_api() {
     let config = common::config(api_port, &format!("http://127.0.0.1:{endpoint}/"));
     let (_child, _config_dir, _state_dir) = common::start(dir.path(), api_port, &config).await;
 
-    let api = BoxApi::new(&format!("http://127.0.0.1:{api_port}"), Duration::from_secs(5)).unwrap();
+    let api = BoxApi::new(
+        &format!("http://127.0.0.1:{api_port}"),
+        None,
+        Duration::from_secs(5),
+    )
+    .unwrap();
 
     assert!(!api.version().await.unwrap().is_empty());
     assert_eq!(api.current_selection().await.unwrap(), "s_auto");
@@ -42,7 +47,12 @@ async fn measures_latency_of_one_outbound() {
     let config = common::config(api_port, &format!("http://127.0.0.1:{endpoint}/"));
     let (_child, _config_dir, _state_dir) = common::start(dir.path(), api_port, &config).await;
 
-    let api = BoxApi::new(&format!("http://127.0.0.1:{api_port}"), Duration::from_secs(5)).unwrap();
+    let api = BoxApi::new(
+        &format!("http://127.0.0.1:{api_port}"),
+        None,
+        Duration::from_secs(5),
+    )
+    .unwrap();
     let tester = Tester::new(TesterConfig::default(), api);
 
     let measurement = tester.measure("d1", Kind::Latency).await.unwrap();

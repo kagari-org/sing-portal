@@ -6,6 +6,9 @@ use std::time::Duration;
 use sing_portal_core::render::SELECTOR_TAG;
 use tokio::sync::RwLock;
 use tonic::Status;
+use tonic::metadata::{Ascii, MetadataValue};
+use tonic::service::Interceptor;
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint};
 
 use crate::error::{AgentError, Result};
@@ -17,6 +20,29 @@ pub mod daemon {
 use daemon::started_service_client::StartedServiceClient;
 use daemon::{SelectOutboundRequest, UrlTestRequest};
 
+/// libbox rejects calls that do not carry the configured command secret, so the
+/// header rides on every request instead of being set at the call sites.
+#[derive(Clone)]
+struct CommandSecretInterceptor {
+    secret: Option<MetadataValue<Ascii>>,
+}
+
+impl Interceptor for CommandSecretInterceptor {
+    fn call(
+        &mut self,
+        mut request: tonic::Request<()>,
+    ) -> std::result::Result<tonic::Request<()>, Status> {
+        if let Some(secret) = &self.secret {
+            request
+                .metadata_mut()
+                .insert("x-command-secret", secret.clone());
+        }
+        Ok(request)
+    }
+}
+
+type CommandClient = StartedServiceClient<InterceptedService<Channel, CommandSecretInterceptor>>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutboundState {
     pub url_test_time: i64,
@@ -27,15 +53,22 @@ pub struct OutboundState {
 pub struct BoxApi {
     url: String,
     channel: Arc<RwLock<Channel>>,
+    secret: Option<MetadataValue<Ascii>>,
     timeout: Duration,
 }
 
 impl BoxApi {
-    pub fn new(url: &str, timeout: Duration) -> Result<Self> {
+    pub fn new(url: &str, api_secret: Option<&str>, timeout: Duration) -> Result<Self> {
         let channel = Self::connect(url)?;
+        let secret = api_secret
+            .filter(|secret| !secret.is_empty())
+            .map(MetadataValue::<Ascii>::try_from)
+            .transpose()
+            .map_err(|error| AgentError::BoxApi(format!("invalid api secret: {error}")))?;
         Ok(Self {
             url: url.to_string(),
             channel: Arc::new(RwLock::new(channel)),
+            secret,
             timeout,
         })
     }
@@ -46,8 +79,14 @@ impl BoxApi {
         Ok(endpoint.connect_lazy())
     }
 
-    async fn client(&self) -> StartedServiceClient<Channel> {
-        StartedServiceClient::new(self.channel.read().await.clone())
+    async fn client(&self) -> CommandClient {
+        let channel = self.channel.read().await.clone();
+        StartedServiceClient::with_interceptor(
+            channel,
+            CommandSecretInterceptor {
+                secret: self.secret.clone(),
+            },
+        )
     }
 
     /// sing-box restarts drop every connection; a lazy channel that lost its
@@ -74,9 +113,7 @@ impl BoxApi {
             }
             Err(_) => {
                 self.reconnect().await;
-                Err(AgentError::BoxApi(
-                    "sing-box api request timed out".into(),
-                ))
+                Err(AgentError::BoxApi("sing-box api request timed out".into()))
             }
         }
     }
@@ -165,5 +202,44 @@ impl BoxApi {
             })
             .collect())
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tonic::service::Interceptor;
+
+    #[test]
+    fn sends_command_secret_when_configured() {
+        let mut interceptor = CommandSecretInterceptor {
+            secret: Some(MetadataValue::from_static("abc")),
+        };
+        let request = interceptor.call(tonic::Request::new(())).unwrap();
+        assert_eq!(
+            request
+                .metadata()
+                .get("x-command-secret")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "abc"
+        );
+    }
+
+    #[test]
+    fn omits_command_secret_when_not_configured() {
+        let mut interceptor = CommandSecretInterceptor { secret: None };
+        let request = interceptor.call(tonic::Request::new(())).unwrap();
+        assert!(request.metadata().get("x-command-secret").is_none());
+    }
+
+    #[test]
+    fn empty_secret_produces_no_interceptor_value() {
+        let secret = Some("")
+            .filter(|secret| !secret.is_empty())
+            .map(MetadataValue::<Ascii>::try_from)
+            .transpose()
+            .unwrap();
+        assert!(secret.is_none());
+    }
 }

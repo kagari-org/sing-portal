@@ -12,6 +12,7 @@ fn config(template: &Value) -> AgentConfig {
         token: None,
         template: serde_json::to_string(template).unwrap(),
         api_url: "http://127.0.0.1:1".into(),
+        api_secret: None,
         latency_url: "https://cp.cloudflare.com/generate_204".into(),
         interval: Duration::from_secs(15),
         once: true,

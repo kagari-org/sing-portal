@@ -40,6 +40,8 @@ pub struct AgentOptions {
     /// Serve only the probes a person asked for; an automatic evaluation gets
     /// an error back instead of spending battery and data.
     pub manual_tests_only: bool,
+    /// libbox's CommandServer secret, sent as `x-command-secret` metadata.
+    pub api_secret: Option<String>,
 }
 
 #[derive(uniffi::Record)]
@@ -48,6 +50,12 @@ pub struct AgentStatus {
     pub selection: String,
     pub health: String,
     pub error: String,
+    pub connected: bool,
+    pub connection_state: String,
+    pub last_connected_at: i64,
+    pub last_sync_at: i64,
+    pub retry_in_secs: i64,
+    pub connection_error: String,
 }
 
 #[uniffi::export(with_foreign)]
@@ -119,6 +127,7 @@ impl PortalAgent {
             token: options.token,
             template: options.template,
             api_url: options.api_url,
+            api_secret: options.api_secret,
             latency_url: options.latency_url,
             interval: Duration::from_secs(options.interval_secs.max(1)),
             once: false,
@@ -145,6 +154,7 @@ impl PortalAgent {
             return;
         }
 
+        self.agent.runtime_status().set_connecting();
         let agent = self.agent.clone();
         let handle = runtime().spawn(async move {
             if let Err(error) = agent.run().await {
@@ -159,6 +169,7 @@ impl PortalAgent {
         if let Some(handle) = running.take() {
             handle.abort();
         }
+        self.agent.runtime_status().set_stopped();
     }
 
     pub fn is_running(&self) -> bool {
@@ -169,10 +180,22 @@ impl PortalAgent {
             .is_some_and(|handle| !handle.is_finished())
     }
 
-    /// What the agent last committed, read from the host's own state. This
-    /// never talks to sing-box, so it is safe to call from the UI thread.
+    /// Writes the initial config (if the host has none) without starting the
+    /// session. Callers run this on an IO thread, not from a host callback.
+    pub fn prepare(&self) -> Result<bool, FfiError> {
+        runtime()
+            .block_on(self.agent.ensure_config())
+            .map_err(FfiError::new)?;
+        Ok(AgentHost::has_config(&*self.bridge))
+    }
+
+    /// What the agent last committed, read from the host's own state, plus what
+    /// the session loop is doing. This never talks to sing-box, so it is safe
+    /// to call from the UI thread.
     pub fn status(&self) -> AgentStatus {
         let state = AgentHost::load_state(&*self.bridge).unwrap_or_default();
+        let runtime = self.agent.runtime_status();
+        let last_sync_at = state.updated_at;
         let health = if state.last_error.is_empty() {
             "ok"
         } else {
@@ -183,6 +206,12 @@ impl PortalAgent {
             selection: state.applied_selection,
             health: health.to_string(),
             error: state.last_error,
+            connected: runtime.connected(),
+            connection_state: runtime.state().as_str().to_string(),
+            last_connected_at: runtime.last_connected_at(),
+            last_sync_at,
+            retry_in_secs: runtime.retry_in_secs(),
+            connection_error: runtime.connection_error(),
         }
     }
 }
@@ -244,6 +273,7 @@ mod tests {
             health_timeout_secs: 1,
             best_effort: true,
             manual_tests_only: true,
+            api_secret: None,
         }
     }
 
@@ -260,7 +290,32 @@ mod tests {
         assert_eq!(status.selection, "node-a");
         assert_eq!(status.health, "ok");
         assert!(status.error.is_empty());
+        assert!(!status.connected);
+        assert_eq!(status.connection_state, "stopped");
+        assert_eq!(status.last_connected_at, 0);
+        assert_eq!(status.retry_in_secs, 0);
+        assert!(status.connection_error.is_empty());
         assert!(!agent.is_running());
+    }
+
+    #[test]
+    fn reports_the_last_sync_timestamp() {
+        let host = Arc::new(FakeHost::default());
+        *host.state.lock().unwrap() =
+            Some(r#"{"appliedRevision":"sha256:x","updatedAt":1700000000}"#.into());
+
+        let agent = PortalAgent::new(options(), host).unwrap();
+        assert_eq!(agent.status().last_sync_at, 1_700_000_000);
+    }
+
+    #[test]
+    fn prepare_writes_initial_config() {
+        let host = Arc::new(FakeHost::default());
+        let agent = PortalAgent::new(options(), host.clone()).unwrap();
+
+        assert!(!host.has_config());
+        assert!(agent.prepare().unwrap());
+        assert!(host.has_config());
     }
 
     #[test]

@@ -139,6 +139,9 @@ struct AgentArgs {
 
     #[arg(long, env = "SING_PORTAL_API_URL")]
     api_url: String,
+
+    #[arg(long, env = "SING_PORTAL_API_SECRET")]
+    api_secret: Option<String>,
 }
 
 #[tokio::main]
@@ -179,6 +182,7 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         token: args.token,
         template,
         api_url: args.api_url,
+        api_secret: args.api_secret,
         latency_url: args.latency_url,
         interval: parse_duration(&args.interval).map_err(anyhow::Error::msg)?,
         once: args.once,

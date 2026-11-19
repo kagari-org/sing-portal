@@ -165,6 +165,7 @@ async fn syncs_state_over_websocket() {
         token: None,
         template: serde_json::to_string(&template).unwrap(),
         api_url: format!("http://127.0.0.1:{api_port}"),
+        api_secret: None,
         latency_url: test_url.clone(),
         interval: Duration::from_secs(15),
         once: true,
@@ -243,7 +244,8 @@ async fn syncs_state_over_websocket() {
     let written = host.written();
     assert_eq!(written["outbounds"][0]["tag"], "s_out");
 
-    let api = sing_portal_agent::api::BoxApi::new(&config.api_url, Duration::from_secs(5)).unwrap();
+    let api =
+        sing_portal_agent::api::BoxApi::new(&config.api_url, None, Duration::from_secs(5)).unwrap();
     assert_eq!(api.current_selection().await.unwrap(), "node-a");
 
     let _ = tokio::time::timeout(Duration::from_secs(2), box_child.kill()).await;
@@ -283,6 +285,7 @@ fn minimal_config() -> (AgentConfig, Arc<TestHost>) {
         token: None,
         template: TEMPLATE.into(),
         api_url: "http://127.0.0.1:1".into(),
+        api_secret: None,
         latency_url: "http://127.0.0.1:1/".into(),
         interval: Duration::from_secs(15),
         once: true,

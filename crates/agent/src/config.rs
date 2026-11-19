@@ -10,6 +10,8 @@ pub struct AgentConfig {
     /// The sing-box template as JSON text; the host owns where it lives.
     pub template: String,
     pub api_url: String,
+    /// libbox's CommandServer secret, sent as `x-command-secret` metadata.
+    pub api_secret: Option<String>,
     pub latency_url: String,
     pub interval: Duration,
     pub once: bool,

@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod host;
 pub mod state;
+pub mod status;
 pub mod tester;
 
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use api::BoxApi;
 pub use config::AgentConfig;
 pub use error::{AgentError, Result};
 pub use host::{Host, HostError, HostResult};
+pub use status::{ConnectionState, RuntimeStatus};
 
 const RENDERER_VERSION: u32 = 6;
 use tester::{Kind, Tester};
@@ -39,11 +41,16 @@ pub struct Agent {
     api: BoxApi,
     tester: Tester,
     egress_health: Arc<Mutex<EgressHealth>>,
+    runtime: Arc<RuntimeStatus>,
 }
 
 impl Agent {
     pub fn new(config: AgentConfig, host: Arc<dyn Host>) -> Result<Self> {
-        let api = BoxApi::new(&config.api_url, Duration::from_secs(5))?;
+        let api = BoxApi::new(
+            &config.api_url,
+            config.api_secret.as_deref(),
+            Duration::from_secs(5),
+        )?;
         let tester = Tester::new(config.tester.clone(), api.clone());
         Ok(Self {
             config,
@@ -51,6 +58,7 @@ impl Agent {
             api,
             tester,
             egress_health: Arc::new(Mutex::new(EgressHealth::default())),
+            runtime: Arc::new(RuntimeStatus::new()),
         })
     }
 
@@ -58,11 +66,17 @@ impl Agent {
         &self.config
     }
 
+    pub fn runtime_status(&self) -> &RuntimeStatus {
+        &self.runtime
+    }
+
     pub async fn run(&self) -> Result<()> {
-        self.ensure_config().await;
+        if let Err(error) = self.ensure_config().await {
+            tracing::warn!(%error, "cannot write the initial config");
+        }
 
         if self.config.once {
-            return match self.session().await {
+            let result = match self.session().await {
                 Ok(()) => Ok(()),
                 Err(error) if self.config.best_effort => {
                     tracing::warn!(%error, "agent run failed, ignoring because of --best-effort");
@@ -70,32 +84,44 @@ impl Agent {
                 }
                 Err(error) => Err(error),
             };
+            self.runtime.set_stopped();
+            return result;
         }
 
+        self.runtime.set_connecting();
         let mut backoff = Duration::from_secs(1);
         loop {
-            match self.session().await {
+            let session_error = match self.session().await {
                 Ok(()) => {
                     tracing::info!("agent session closed");
                     backoff = Duration::from_secs(1);
+                    None
                 }
-                Err(error) => tracing::warn!(%error, "agent session failed"),
-            }
+                Err(error) => {
+                    tracing::warn!(%error, "agent session failed");
+                    Some(error.to_string())
+                }
+            };
+            self.runtime
+                .set_reconnecting(backoff, session_error.as_deref());
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(Duration::from_secs(30));
+            self.runtime.set_connecting();
         }
     }
 
-    async fn ensure_config(&self) {
+    /// Writes a bootstrap config for a host that has none yet. A caller can run
+    /// this before starting anything else, so the first VPN start already has a
+    /// config to hand to sing-box.
+    pub async fn ensure_config(&self) -> Result<()> {
         if self.host.has_config() {
-            return;
+            return Ok(());
         }
-        let Ok(bytes) = apply::render_bytes(&self.config, &[]) else {
-            return;
-        };
-        if let Err(error) = self.host.write_config(&bytes) {
-            tracing::warn!(%error, "cannot write the initial config");
-        }
+        let bytes = apply::render_bytes(&self.config, &[])?;
+        self.host
+            .write_config(&bytes)
+            .map_err(|error| AgentError::Host(error.to_string()))?;
+        Ok(())
     }
 
     async fn session(&self) -> Result<()> {
@@ -112,6 +138,7 @@ impl Agent {
         let (socket, _) = tokio_tungstenite::connect_async(request)
             .await
             .map_err(|error| AgentError::Portal(error.to_string()))?;
+        self.runtime.set_connected();
         let (mut sink, mut stream) = socket.split();
 
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<Message>(64);
@@ -298,6 +325,9 @@ impl Agent {
         let config_missing = !self.host.has_config();
         // the rendered config embeds the latency url; re-render when it changes
         let latency_url_changed = local.applied_latency_url != self.config.latency_url;
+        // a new portal may hand out a different outbound set for the same
+        // revision, so a URL change forces one re-render
+        let portal_url_changed = local.applied_portal_url != self.config.portal_url;
         // the agent controls parts of the rendered config (test inbound), so a
         // renderer change must be re-applied even when the revision is stable
         let renderer_changed = local.applied_renderer_version != RENDERER_VERSION;
@@ -311,12 +341,14 @@ impl Agent {
             || latency_url_changed
             || renderer_changed
             || template_changed
+            || portal_url_changed
         {
             let previous = local.previous_config.as_deref();
             match apply::apply(&self.host, &self.config, &outbounds, &self.api, previous).await {
                 Ok(rendered) => {
                     local.applied_revision = revision.clone();
                     local.applied_latency_url = self.config.latency_url.clone();
+                    local.applied_portal_url = self.config.portal_url.clone();
                     local.applied_renderer_version = RENDERER_VERSION;
                     local.applied_template_hash = template_hash;
                     local.previous_config = Some(rendered);
@@ -533,6 +565,7 @@ mod tests {
             token: None,
             template: r#"{"log":{"level":"warn"}}"#.into(),
             api_url: "http://127.0.0.1:1".into(),
+            api_secret: None,
             latency_url: "http://127.0.0.1:1/".into(),
             interval: Duration::from_secs(15),
             once: false,

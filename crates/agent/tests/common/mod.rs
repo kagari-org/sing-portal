@@ -91,6 +91,7 @@ pub async fn start(root: &Path, api_port: u16, config: &Value) -> (Child, PathBu
     // make sure the api service really answers before the test can reload
     let api = sing_portal_agent::api::BoxApi::new(
         &format!("http://127.0.0.1:{api_port}"),
+        None,
         Duration::from_secs(5),
     )
     .unwrap();

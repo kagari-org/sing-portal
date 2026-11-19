@@ -106,6 +106,7 @@ async fn tester(
 ) -> Tester {
     let api = BoxApi::new(
         &format!("http://127.0.0.1:{api_port}"),
+        None,
         Duration::from_secs(5),
     )
     .unwrap();

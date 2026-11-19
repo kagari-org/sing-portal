@@ -57,6 +57,7 @@ export interface Machine {
   address: string
   selection: string
   mode: 'auto' | 'manual'
+  autoMeasure: boolean
   score: number | null
   best: string | null
   bestScore: number | null
@@ -218,6 +219,8 @@ export const api = {
     }),
   runAuto: (machine: string) =>
     request<{ status: string }>(`/api/nodes/${machine}/auto`, { method: 'POST' }),
+  deleteMachine: (machine: string) =>
+    request<void>(`/api/nodes/${machine}`, { method: 'DELETE' }),
   setSelection: (machine: string, outbound: string) =>
     request<SelectionResult>(`/api/nodes/${machine}/selection`, {
       method: 'PUT',

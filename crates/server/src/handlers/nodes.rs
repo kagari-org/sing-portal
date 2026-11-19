@@ -30,6 +30,7 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<NodeView>
                 SelectionMode::Auto.as_str().to_string(),
             ),
         };
+        let auto_measure = state.registry().auto_measure(&name).await.unwrap_or(true);
 
         let report = state.store().report(&name).await?;
         let measurements = state.store().measurements(&name).await?;
@@ -59,6 +60,7 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<NodeView>
             },
             selection: outbound,
             mode,
+            auto_measure,
             score,
             best,
             best_score,
@@ -179,6 +181,32 @@ pub async fn set_mode(
     }
 
     Ok(Json(json!({ "mode": mode.as_str() })))
+}
+
+/// Forgets a machine. Only allowed while its agent is away: a connected agent
+/// writes its report straight back, and a later connection seeds a fresh
+/// selection anyway.
+pub async fn delete(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<StatusCode> {
+    if state.registry().is_connected(&name).await {
+        return Err(ApiError::Conflict(format!(
+            "agent `{name}` is connected; stop it before deleting the machine"
+        )));
+    }
+    if !service::is_known_machine(&state, &name).await {
+        return Err(ApiError::NotFound(format!("unknown machine {name}")));
+    }
+
+    state.store().delete_machine(&name).await?;
+    state
+        .store()
+        .record_audit("ui", "machine.delete", &name, "")
+        .await?;
+    state.notify_changed(&["nodes", "measurements", "audit"]);
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn auto(
@@ -328,7 +356,7 @@ pub async fn test(
         )));
     }
 
-    let result = service::probe(&state, &name, &request.tag, kind, false).await?;
+    let result = service::probe(&state, &name, &request.tag, kind).await?;
     state
         .store()
         .record_manual_measurement(

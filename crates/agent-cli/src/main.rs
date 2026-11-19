@@ -75,9 +75,10 @@ struct AgentArgs {
     #[arg(long = "best-effort")]
     best_effort: bool,
 
-    /// Skip probes an automatic evaluation asks for; manual tests still run.
-    #[arg(long, env = "SING_PORTAL_MANUAL_TESTS_ONLY")]
-    manual_tests_only: bool,
+    /// Sit out the portal's scheduled measurements; a test someone asks
+    /// for still runs.
+    #[arg(long = "no-auto-measure", env = "SING_PORTAL_NO_AUTO_MEASURE")]
+    no_auto_measure: bool,
 
     #[arg(long, env = "SING_PORTAL_TEST_TIMEOUT", default_value = "10s")]
     test_timeout: String,
@@ -187,7 +188,7 @@ async fn run_agent(args: AgentArgs) -> Result<()> {
         interval: parse_duration(&args.interval).map_err(anyhow::Error::msg)?,
         once: args.once,
         best_effort: args.best_effort,
-        auto_measure: !args.manual_tests_only,
+        auto_measure: !args.no_auto_measure,
         health_timeout: parse_duration(&args.health_timeout).map_err(anyhow::Error::msg)?,
         egress_health_interval: parse_duration(&args.egress_health_interval)
             .map_err(anyhow::Error::msg)?,

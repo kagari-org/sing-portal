@@ -15,10 +15,6 @@ pub enum ServerMessage {
         id: String,
         kind: String,
         tag: String,
-        /// True when an automatic evaluation asked for this probe, so a device
-        /// can serve manual tests only.
-        #[serde(default)]
-        automatic: bool,
     },
     Select {
         id: String,
@@ -42,6 +38,10 @@ pub enum AgentMessage {
     Hello {
         name: String,
         version: String,
+        /// Whether the portal may run scheduled measurements on this machine.
+        /// An older agent does not say, and is measured like before.
+        #[serde(default = "default_true")]
+        auto_measure: bool,
     },
     Status {
         revision: String,
@@ -73,6 +73,10 @@ pub enum AgentMessage {
         id: Option<String>,
         message: String,
     },
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl AgentMessage {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sing_portal_core::protocol::{AgentMessage, ServerMessage};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::error::{ApiError, ApiResult};
 
@@ -11,6 +11,8 @@ use crate::error::{ApiError, ApiResult};
 struct ConnectedAgent {
     outbound: mpsc::Sender<ServerMessage>,
     version: String,
+    /// What the agent said about scheduled measurements when it connected.
+    auto_measure: bool,
 }
 
 #[derive(Default)]
@@ -24,6 +26,7 @@ impl Registry {
         &self,
         name: &str,
         version: &str,
+        auto_measure: bool,
         outbound: mpsc::Sender<ServerMessage>,
     ) {
         self.agents.lock().await.insert(
@@ -31,6 +34,7 @@ impl Registry {
             ConnectedAgent {
                 outbound,
                 version: version.to_string(),
+                auto_measure,
             },
         );
     }
@@ -49,6 +53,14 @@ impl Registry {
         self.agents.lock().await.contains_key(name)
     }
 
+    pub async fn auto_measure(&self, name: &str) -> Option<bool> {
+        self.agents
+            .lock()
+            .await
+            .get(name)
+            .map(|agent| agent.auto_measure)
+    }
+
     pub async fn version(&self, name: &str) -> Option<String> {
         self.agents
             .lock()
@@ -63,7 +75,9 @@ impl Registry {
             agents.get(name).map(|agent| agent.outbound.clone())
         };
         let Some(outbound) = outbound else {
-            return Err(ApiError::Upstream(format!("agent `{name}` is not connected")));
+            return Err(ApiError::Upstream(format!(
+                "agent `{name}` is not connected"
+            )));
         };
 
         outbound

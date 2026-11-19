@@ -90,6 +90,7 @@ pub struct NodeView {
     pub address: String,
     pub selection: String,
     pub mode: String,
+    pub auto_measure: bool,
     pub score: Option<f64>,
     pub best: Option<String>,
     pub best_score: Option<f64>,

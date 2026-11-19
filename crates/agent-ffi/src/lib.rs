@@ -37,9 +37,8 @@ pub struct AgentOptions {
     pub interval_secs: u64,
     pub health_timeout_secs: u64,
     pub best_effort: bool,
-    /// Serve only the probes a person asked for; an automatic evaluation gets
-    /// an error back instead of spending battery and data.
-    pub manual_tests_only: bool,
+    /// Whether the portal may run scheduled measurements on this machine.
+    pub auto_measure: bool,
     /// libbox's CommandServer secret, sent as `x-command-secret` metadata.
     pub api_secret: Option<String>,
 }
@@ -132,7 +131,7 @@ impl PortalAgent {
             interval: Duration::from_secs(options.interval_secs.max(1)),
             once: false,
             best_effort: options.best_effort,
-            auto_measure: !options.manual_tests_only,
+            auto_measure: options.auto_measure,
             health_timeout: Duration::from_secs(options.health_timeout_secs.max(1)),
             egress_health_interval: Duration::ZERO,
             egress_health_failures: 2,
@@ -272,7 +271,7 @@ mod tests {
             interval_secs: 15,
             health_timeout_secs: 1,
             best_effort: true,
-            manual_tests_only: true,
+            auto_measure: true,
             api_secret: None,
         }
     }

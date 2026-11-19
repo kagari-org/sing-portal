@@ -16,8 +16,7 @@ pub struct AgentConfig {
     pub interval: Duration,
     pub once: bool,
     pub best_effort: bool,
-    /// Serve automatic evaluation probes too. A phone turns this off so its
-    /// battery and data are only spent on tests someone asked for.
+    /// Whether the portal may run scheduled measurements on this machine.
     pub auto_measure: bool,
     pub health_timeout: Duration,
     pub egress_health_interval: Duration,

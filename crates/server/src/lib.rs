@@ -18,7 +18,7 @@ use axum::extract::Request;
 use axum::http::{Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use serde_json::json;
 use tower_http::trace::TraceLayer;
 
@@ -73,6 +73,7 @@ fn api_routes() -> Router<AppState> {
         .route("/api/nodes/{name}/test", post(nodes::test))
         .route("/api/nodes/{name}/auto", post(nodes::auto))
         .route("/api/nodes/{name}/mode", put(nodes::set_mode))
+        .route("/api/nodes/{name}", delete(nodes::delete))
         .route("/api/nodes/{name}/measurements", get(nodes::measurements))
         .route("/api/nodes/{name}/evaluation", get(nodes::evaluation))
 }

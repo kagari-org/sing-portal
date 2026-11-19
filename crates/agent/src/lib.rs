@@ -153,6 +153,7 @@ impl Agent {
         let hello = AgentMessage::Hello {
             name: self.config.node_name.clone(),
             version: env!("CARGO_PKG_VERSION").to_string(),
+            auto_measure: self.config.auto_measure,
         };
         send_message(&sender, &hello).await?;
         tracing::info!(portal = %url, "agent connected");
@@ -192,22 +193,7 @@ impl Agent {
                     match frame {
                         Some(Ok(Message::Text(text))) => {
                             let message: ServerMessage = serde_json::from_str(&text)?;
-                            if let ServerMessage::Test {
-                                id,
-                                kind,
-                                tag,
-                                automatic,
-                            } = message
-                            {
-                                if automatic && !self.config.auto_measure {
-                                    let reply = AgentMessage::Error {
-                                        id: Some(id),
-                                        message: "automatic measurements are disabled on this device"
-                                            .into(),
-                                    };
-                                    send_message(&sender, &reply).await?;
-                                    continue;
-                                }
+                            if let ServerMessage::Test { id, kind, tag } = message {
                                 spawn_test(self.tester.clone(), sender.clone(), id, kind, tag);
                                 continue;
                             }
@@ -264,18 +250,7 @@ impl Agent {
                 selection,
                 outbounds,
             } => self.sync(id, revision, selection, outbounds).await,
-            ServerMessage::Test {
-                id,
-                kind,
-                tag,
-                automatic,
-            } => {
-                if automatic && !self.config.auto_measure {
-                    return AgentMessage::Error {
-                        id: Some(id),
-                        message: "automatic measurements are disabled on this device".into(),
-                    };
-                }
+            ServerMessage::Test { id, kind, tag } => {
                 let Some(kind) = Kind::parse(&kind) else {
                     return AgentMessage::Error {
                         id: Some(id),
@@ -558,7 +533,7 @@ mod tests {
         }
     }
 
-    fn agent(auto_measure: bool) -> Agent {
+    fn agent() -> Agent {
         let config = AgentConfig {
             portal_url: String::new(),
             node_name: "phone".into(),
@@ -570,7 +545,7 @@ mod tests {
             interval: Duration::from_secs(15),
             once: false,
             best_effort: true,
-            auto_measure,
+            auto_measure: true,
             health_timeout: Duration::from_secs(1),
             egress_health_interval: Duration::ZERO,
             egress_health_failures: 2,
@@ -580,44 +555,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refuses_automatic_probes_when_manual_only() {
+    async fn answers_every_probe_it_is_asked_for() {
+        // whether a machine should be measured is the portal's call; the agent
+        // has no say, so a test request is always attempted
         let message = ServerMessage::Test {
             id: "t1".into(),
             kind: "latency".into(),
             tag: "node-a".into(),
-            automatic: true,
         };
-
-        match agent(false).handle(message.clone()).await {
-            AgentMessage::Error { id, message } => {
-                assert_eq!(id.as_deref(), Some("t1"));
-                assert!(message.contains("automatic"), "got {message}");
-            }
-            other => panic!("expected an error, got {other:?}"),
-        }
-
-        // a probe someone asked for still runs (and fails reaching the api)
-        match agent(false).handle(message).await {
-            AgentMessage::Error { .. } | AgentMessage::TestResult { .. } => {}
-            other => panic!("unexpected reply {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn serves_automatic_probes_unless_told_otherwise() {
-        let message = ServerMessage::Test {
-            id: "t1".into(),
-            kind: "latency".into(),
-            tag: "node-a".into(),
-            automatic: true,
-        };
-        match agent(true).handle(message).await {
-            AgentMessage::Error { message, .. } => {
-                assert!(
-                    !message.contains("automatic measurements are disabled"),
-                    "got {message}"
-                );
-            }
+        match agent().handle(message).await {
+            AgentMessage::Error { id, .. } => assert_eq!(id.as_deref(), Some("t1")),
             AgentMessage::TestResult { .. } => {}
             other => panic!("unexpected reply {other:?}"),
         }

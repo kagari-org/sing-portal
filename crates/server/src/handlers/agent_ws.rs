@@ -54,12 +54,16 @@ async fn supervise(state: AppState, socket: WebSocket) {
 
     let hello = match tokio::time::timeout(Duration::from_secs(10), stream.next()).await {
         Ok(Some(Ok(Message::Text(text)))) => match serde_json::from_str::<AgentMessage>(&text) {
-            Ok(AgentMessage::Hello { name, version }) => (name, version),
+            Ok(AgentMessage::Hello {
+                name,
+                version,
+                auto_measure,
+            }) => (name, version, auto_measure),
             _ => return,
         },
         _ => return,
     };
-    let (name, version) = hello;
+    let (name, version, auto_measure) = hello;
     if name.trim().is_empty() {
         return;
     }
@@ -67,7 +71,7 @@ async fn supervise(state: AppState, socket: WebSocket) {
     let (outbound, mut outbound_rx) = mpsc::channel::<ServerMessage>(32);
     state
         .registry()
-        .register(&name, &version, outbound.clone())
+        .register(&name, &version, auto_measure, outbound.clone())
         .await;
     if let Err(error) = state.store().seed_selection(&name, AUTO_TAG).await {
         tracing::warn!(%name, %error, "cannot seed machine selection");

@@ -4,6 +4,7 @@ import {
   NButton,
   NCard,
   NDataTable,
+  NPopconfirm,
   NSelect,
   NSpace,
   NSwitch,
@@ -64,6 +65,17 @@ const columns = computed<DataTableColumns<Machine>>(() => [
           if (value !== (row.mode === 'auto')) setMode(row, value)
         },
       }),
+  },
+  {
+    title: 'Auto measure',
+    key: 'autoMeasure',
+    width: 130,
+    render: (row) =>
+      h(
+        NTag,
+        { size: 'small', type: row.autoMeasure ? 'default' : 'warning' },
+        { default: () => (row.autoMeasure ? 'scheduled' : 'manual only') },
+      ),
   },
   {
     title: 'Egress',
@@ -174,6 +186,19 @@ const columns = computed<DataTableColumns<Machine>>(() => [
             },
             { default: () => 'Test latency' },
           ),
+          h(
+            NPopconfirm,
+            { onPositiveClick: () => remove(row) },
+            {
+              trigger: () =>
+                h(
+                  NButton,
+                  { size: 'small', type: 'error', disabled: row.reachable },
+                  { default: () => 'Delete' },
+                ),
+              default: () => `Forget ${row.name}? It returns if its agent connects again.`,
+            },
+          ),
         ],
       }),
   },
@@ -184,6 +209,16 @@ function healthType(health: string): 'success' | 'warning' | 'error' | 'default'
   if (health === 'no_active_subscriptions') return 'warning'
   if (health === '') return 'default'
   return 'error'
+}
+
+async function remove(machine: Machine) {
+  try {
+    await api.deleteMachine(machine.name)
+    message.success(`${machine.name} deleted`)
+    await store.refreshSilently()
+  } catch (error) {
+    message.error((error as Error).message)
+  }
 }
 
 async function setMode(machine: Machine, auto: boolean) {

@@ -64,6 +64,26 @@ impl Store {
         Ok(())
     }
 
+    /// Forgets everything the portal knows about a machine. A later agent that
+    /// connects under this name seeds a fresh selection, so this only clears
+    /// machines that are gone for good.
+    pub async fn delete_machine(&self, node_name: &str) -> Result<()> {
+        let mut transaction = self.pool().begin().await?;
+        for statement in [
+            "DELETE FROM selections WHERE node_name = ?",
+            "DELETE FROM node_reports WHERE node_name = ?",
+            "DELETE FROM measurements WHERE node_name = ?",
+            "DELETE FROM manual_measurements WHERE node_name = ?",
+        ] {
+            sqlx::query(statement)
+                .bind(node_name)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
     pub async fn seed_selection(&self, node_name: &str, outbound: &str) -> Result<()> {
         sqlx::query(
             "INSERT INTO selections (node_name, outbound, mode, updated_at) VALUES (?, ?, 'auto', ?)

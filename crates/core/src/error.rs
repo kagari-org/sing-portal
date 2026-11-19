@@ -2,7 +2,9 @@
 pub enum Error {
     #[error("empty subscription content")]
     EmptyContent,
-    #[error("subscription content looks like an HTML page; the link is probably expired or requires a login")]
+    #[error(
+        "subscription content looks like an HTML page; the link is probably expired or requires a login"
+    )]
     HtmlContent,
     #[error("unrecognized subscription format")]
     UnrecognizedFormat,
@@ -20,6 +22,8 @@ pub enum Error {
     UnsupportedScheme(String),
     #[error("template must be a JSON object")]
     TemplateNotObject,
-    #[error("template must not contain an outbounds key; the renderer owns it")]
-    TemplateHasOutbounds,
+    #[error("template outbounds must be a JSON array")]
+    TemplateOutboundsNotArray,
+    #[error("template outbound tag `{0}` collides with one sing-portal manages")]
+    TemplateOutboundTagClash(String),
 }

@@ -40,10 +40,7 @@ fn sing_box_json_is_parsed() {
 
     let normalized = normalize(parsed.outbounds, "jc").unwrap();
     assert_eq!(normalized.len(), 2);
-    let tags: Vec<&str> = normalized
-        .iter()
-        .filter_map(outbound_tag)
-        .collect();
+    let tags: Vec<&str> = normalized.iter().filter_map(outbound_tag).collect();
     assert_eq!(tags, vec!["jc · JP 02", "jc · US 01"]);
     assert_eq!(
         by_tag(&normalized, "jc · US 01")["flow"],
@@ -172,8 +169,8 @@ fn base64_uri_list_is_parsed() {
 
 #[test]
 fn unsupported_schemes_are_reported() {
-    let error =
-        uri::parse_lines("naive+https://user@example.com:443#NAIVE\nvmess://not-base64\n").unwrap_err();
+    let error = uri::parse_lines("naive+https://user@example.com:443#NAIVE\nvmess://not-base64\n")
+        .unwrap_err();
     let message = error.to_string();
     assert!(message.contains("naive"), "{message}");
     assert!(message.contains("vmess"), "{message}");
@@ -189,7 +186,11 @@ fn normalize_prefixes_dedupes_and_sorts() {
     ];
 
     let normalized = normalize(outbounds, "sub").unwrap();
-    let tags: Vec<String> = normalized.iter().filter_map(outbound_tag).map(ToString::to_string).collect();
+    let tags: Vec<String> = normalized
+        .iter()
+        .filter_map(outbound_tag)
+        .map(ToString::to_string)
+        .collect();
     assert_eq!(
         tags,
         vec![
@@ -286,7 +287,63 @@ fn render_without_nodes_falls_back_to_direct() {
 }
 
 #[test]
-fn render_rejects_template_with_outbounds() {
-    let error = render(&json!({"outbounds": []}), &[], DEFAULT_TEST_URL).unwrap_err();
-    assert!(error.to_string().contains("outbounds"));
+fn render_keeps_template_outbounds_and_adds_its_own() {
+    let template = json!({
+        "outbounds": [
+            { "type": "direct", "tag": "lan" },
+            { "type": "wireguard", "tag": "wg-home" }
+        ]
+    });
+    let outbounds = vec![json!({
+        "type": "socks", "tag": "node-a", "server": "h", "server_port": 1
+    })];
+
+    let rendered = render(&template, &outbounds, DEFAULT_TEST_URL).unwrap();
+    let list = rendered["outbounds"].as_array().unwrap();
+    let tags: Vec<&str> = list
+        .iter()
+        .filter_map(|outbound| outbound.get("tag").and_then(Value::as_str))
+        .collect();
+
+    assert_eq!(tags.len(), 6, "template {tags:?}");
+    assert_eq!(&tags[..2], ["lan", "wg-home"], "template outbounds first");
+    assert!(tags.contains(&SELECTOR_TAG));
+    assert!(tags.contains(&"node-a"));
+
+    // the portal's selector only offers what sing-portal manages
+    let selector = list
+        .iter()
+        .find(|outbound| outbound["tag"] == SELECTOR_TAG)
+        .unwrap();
+    let choices = selector["outbounds"].as_array().unwrap();
+    assert!(choices.iter().any(|choice| choice == "node-a"));
+    assert!(
+        !choices
+            .iter()
+            .any(|choice| choice == "lan" || choice == "wg-home"),
+        "template outbounds must not be selectable from the portal: {choices:?}"
+    );
+}
+
+#[test]
+fn render_rejects_a_tag_the_portal_owns() {
+    let template = json!({ "outbounds": [{ "type": "direct", "tag": SELECTOR_TAG }] });
+    let error = render(&template, &[], DEFAULT_TEST_URL).unwrap_err();
+    assert!(error.to_string().contains(SELECTOR_TAG), "{error}");
+}
+
+#[test]
+fn render_rejects_a_tag_collision_with_a_node() {
+    let template = json!({ "outbounds": [{ "type": "direct", "tag": "node-a" }] });
+    let outbounds = vec![json!({
+        "type": "socks", "tag": "node-a", "server": "h", "server_port": 1
+    })];
+    let error = render(&template, &outbounds, DEFAULT_TEST_URL).unwrap_err();
+    assert!(error.to_string().contains("node-a"), "{error}");
+}
+
+#[test]
+fn render_rejects_outbounds_that_are_not_an_array() {
+    let error = render(&json!({ "outbounds": "direct" }), &[], DEFAULT_TEST_URL).unwrap_err();
+    assert!(error.to_string().contains("outbounds"), "{error}");
 }

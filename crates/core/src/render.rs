@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde_json::{Value, json};
 
 use crate::error::Error;
@@ -18,9 +20,13 @@ pub fn render(template: &Value, outbounds: &[Value], test_url: &str) -> Result<V
         .cloned()
         .ok_or(Error::TemplateNotObject)?;
 
-    if config.contains_key("outbounds") {
-        return Err(Error::TemplateHasOutbounds);
-    }
+    // A template may declare outbounds of its own (a local direct, an endpoint,
+    // ...). The portal only adds its own on top and never touches those.
+    let mut existing = match config.remove("outbounds") {
+        Some(Value::Array(existing)) => existing,
+        Some(_) => return Err(Error::TemplateOutboundsNotArray),
+        None => Vec::new(),
+    };
 
     let nodes: Vec<Value> = outbounds
         .iter()
@@ -63,7 +69,25 @@ pub fn render(template: &Value, outbounds: &[Value], test_url: &str) -> Result<V
     rendered.push(json!({ "type": "direct", "tag": DIRECT_TAG }));
     rendered.extend(nodes);
 
-    config.insert("outbounds".to_string(), Value::Array(rendered));
+    // sing-box refuses duplicate tags, and the resulting "config never starts"
+    // is far harder to read than this
+    let mut taken: HashSet<String> = existing
+        .iter()
+        .filter_map(|outbound| outbound_tag(outbound).map(ToString::to_string))
+        .collect();
+    for reserved in [SELECTOR_TAG, AUTO_TAG, DIRECT_TAG] {
+        if !taken.insert(reserved.to_string()) {
+            return Err(Error::TemplateOutboundTagClash(reserved.to_string()));
+        }
+    }
+    for tag in tags.iter().filter_map(Value::as_str) {
+        if !taken.insert(tag.to_string()) {
+            return Err(Error::TemplateOutboundTagClash(tag.to_string()));
+        }
+    }
+
+    existing.extend(rendered);
+    config.insert("outbounds".to_string(), Value::Array(existing));
     Ok(Value::Object(config))
 }
 

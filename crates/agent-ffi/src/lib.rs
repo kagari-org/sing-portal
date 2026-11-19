@@ -11,14 +11,14 @@ use tokio::task::JoinHandle;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum FfiError {
-    #[error("{message}")]
-    Failed { message: String },
+    #[error("{reason}")]
+    Failed { reason: String },
 }
 
 impl FfiError {
     fn new(message: impl ToString) -> Self {
         Self::Failed {
-            message: message.to_string(),
+            reason: message.to_string(),
         }
     }
 }

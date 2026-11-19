@@ -7,6 +7,7 @@ members = [
   "crates/server-cli",
   "crates/agent",
   "crates/agent-cli",
+  "crates/agent-ffi",
 ]
 
 [workspace.package]
@@ -19,6 +20,7 @@ sing-portal-core = { path = "crates/core" }
 sing-portal-store = { path = "crates/store" }
 sing-portal-server = { path = "crates/server" }
 sing-portal-agent = { path = "crates/agent" }
+sing-portal-agent-ffi = { path = "crates/agent-ffi" }
 
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
@@ -48,6 +50,7 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uniffi = "0.29"
 url = "2"
 uuid = { version = "1", features = ["v7"] }
 wiremock = "0.6"

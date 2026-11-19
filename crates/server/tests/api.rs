@@ -677,7 +677,7 @@ async fn evaluation_skips_a_candidate_that_fails_the_egress_check() {
                     agent_selects.lock().unwrap().push(outbound);
                     AgentMessage::SelectResult { id, applied: true }
                 }
-                ServerMessage::Test { id, kind, tag } => {
+                ServerMessage::Test { id, kind, tag, .. } => {
                     if kind == "latency" {
                         let latency = if tag.contains("US 01") { 10.0 } else { 30.0 };
                         AgentMessage::TestResult {
@@ -842,7 +842,7 @@ async fn keeps_latency_for_nodes_that_miss_the_bandwidth_round() {
                 ServerMessage::Select { id, .. } => {
                     AgentMessage::SelectResult { id, applied: true }
                 }
-                ServerMessage::Test { id, kind, tag } => match kind.as_str() {
+                ServerMessage::Test { id, kind, tag, .. } => match kind.as_str() {
                     "latency" => AgentMessage::TestResult {
                         id,
                         kind,

@@ -226,7 +226,7 @@ pub async fn evaluate_machine(
             let done = done.clone();
             async move {
                 let (latency_ms, ranked) =
-                    match service::probe(&state, &machine, &tag, "latency").await {
+                    match service::probe(&state, &machine, &tag, "latency", true).await {
                         Ok(probe) => (
                             probe.latency_ms,
                             probe.latency_ms.map(|latency_ms| (tag.clone(), latency_ms)),
@@ -294,7 +294,7 @@ pub async fn evaluate_machine(
         state
             .update_evaluation(machine, "bandwidth", index, total_candidates, Some(tag))
             .await;
-        match service::probe(state, machine, tag, "both").await {
+        match service::probe(state, machine, tag, "both", true).await {
             Ok(probe) => {
                 let latency_ms = probe.latency_ms.or_else(|| baseline.get(tag).copied());
                 let score = state
@@ -403,7 +403,7 @@ pub async fn evaluate_machine(
             .update_evaluation(machine, "verify", index, max_checks, Some(tag))
             .await;
 
-        match service::probe(state, machine, tag, "egress").await {
+        match service::probe(state, machine, tag, "egress", true).await {
             Ok(check) if check.latency_ms.is_some() => {
                 chosen = Some((tag.clone(), *score));
                 break;

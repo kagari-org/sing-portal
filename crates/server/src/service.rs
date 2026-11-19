@@ -243,11 +243,13 @@ pub async fn probe(
     machine: &str,
     tag: &str,
     kind: &str,
+    automatic: bool,
 ) -> ApiResult<crate::handlers::views::TestResponse> {
     let message = ServerMessage::Test {
         id: uuid::Uuid::now_v7().to_string(),
         kind: kind.to_string(),
         tag: tag.to_string(),
+        automatic,
     };
     let timeout = match kind {
         "bandwidth" | "both" => Duration::from_secs(30),

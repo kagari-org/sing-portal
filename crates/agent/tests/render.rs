@@ -16,6 +16,7 @@ fn config(template: &Value) -> AgentConfig {
         interval: Duration::from_secs(15),
         once: true,
         best_effort: false,
+        auto_measure: true,
         health_timeout: Duration::from_secs(1),
         egress_health_interval: Duration::ZERO,
         egress_health_failures: 2,

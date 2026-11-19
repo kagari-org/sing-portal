@@ -328,7 +328,7 @@ pub async fn test(
         )));
     }
 
-    let result = service::probe(&state, &name, &request.tag, kind).await?;
+    let result = service::probe(&state, &name, &request.tag, kind, false).await?;
     state
         .store()
         .record_manual_measurement(

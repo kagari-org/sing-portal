@@ -15,6 +15,10 @@ pub enum ServerMessage {
         id: String,
         kind: String,
         tag: String,
+        /// True when an automatic evaluation asked for this probe, so a device
+        /// can serve manual tests only.
+        #[serde(default)]
+        automatic: bool,
     },
     Select {
         id: String,

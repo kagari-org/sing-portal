@@ -14,9 +14,11 @@ import {
   type DataTableColumns,
 } from 'naive-ui'
 import { api, formatLatency, formatTimestamp, type Machine } from '../api'
+import { useIsCompact } from '../composables/useMediaQuery'
 import { usePortalStore } from '../stores/portal'
 
 const store = usePortalStore()
+const isCompact = useIsCompact()
 const message = useMessage()
 const busy = ref<string | null>(null)
 const latency = ref<Record<string, number | null>>({})
@@ -39,10 +41,11 @@ function formatScore(score: number | null | undefined): string {
 }
 
 const columns = computed<DataTableColumns<Machine>>(() => [
-  { title: 'Machine', key: 'name' },
+  { title: 'Machine', key: 'name', width: 110 },
   {
     title: 'Clash API',
     key: 'address',
+    width: 150,
     render: (row) => h(NText, { code: true }, { default: () => row.address }),
   },
   {
@@ -100,6 +103,7 @@ const columns = computed<DataTableColumns<Machine>>(() => [
   {
     title: 'Best',
     key: 'best',
+    width: 160,
     render: (row) =>
       h(NText, { depth: 3 }, {
         default: () => (row.best ? `${row.best} (${formatScore(row.bestScore)})` : '—'),
@@ -108,7 +112,7 @@ const columns = computed<DataTableColumns<Machine>>(() => [
   {
     title: 'Evaluation',
     key: 'evaluation',
-    width: 220,
+    width: 200,
     render: (row) => {
       const evaluation = row.evaluation
       if (!evaluation) return h(NText, { depth: 3 }, { default: () => '—' })
@@ -146,6 +150,7 @@ const columns = computed<DataTableColumns<Machine>>(() => [
   {
     title: 'Reported revision',
     key: 'reportedRevision',
+    width: 160,
     render: (row) =>
       h(NText, { depth: 3, title: row.report?.revision || '' }, {
         default: () => shortRevision(row.report?.revision),
@@ -154,6 +159,7 @@ const columns = computed<DataTableColumns<Machine>>(() => [
   {
     title: 'Last report',
     key: 'reportedAt',
+    width: 170,
     render: (row) => formatTimestamp(row.report?.reportedAt ?? null),
   },
   {
@@ -295,13 +301,142 @@ onMounted(() => {
 
 <template>
   <div class="toolbar">
-    <h2 style="margin: 0">Machines</h2>
+    <h2 class="page-title">Machines</h2>
     <n-space>
       <n-button @click="store.loadMachines()">Refresh</n-button>
     </n-space>
   </div>
 
-  <n-card>
-    <n-data-table :columns="columns" :data="store.machines" :bordered="false" :scroll-x="1400" />
+  <n-card v-if="!isCompact">
+    <n-data-table :columns="columns" :data="store.machines" :bordered="false" :scroll-x="2070" />
   </n-card>
+
+  <div v-else class="mobile-list">
+    <n-card v-for="machine in store.machines" :key="machine.name" size="small">
+      <div class="item-head">
+        <div class="item-heading">
+          <n-text strong>{{ machine.name }}</n-text>
+          <n-text code class="text-break">{{ machine.address }}</n-text>
+        </div>
+        <n-tag :type="machine.reachable ? 'success' : 'error'" size="small">
+          {{ machine.reachable ? machine.version ?? 'online' : 'unreachable' }}
+        </n-tag>
+      </div>
+
+      <div class="field-grid">
+        <div class="field">
+          <n-text depth="3" class="field-label">Auto selection</n-text>
+          <n-switch
+            :value="machine.mode === 'auto'"
+            @update:value="(value) => setMode(machine, value)"
+          />
+        </div>
+        <div class="field">
+          <n-text depth="3" class="field-label">Auto measure</n-text>
+          <n-tag size="small" :type="machine.autoMeasure ? 'default' : 'warning'">
+            {{ machine.autoMeasure ? 'scheduled' : 'manual only' }}
+          </n-tag>
+        </div>
+        <div class="field field-wide">
+          <n-text depth="3" class="field-label">Egress</n-text>
+          <n-select
+            :value="machine.selection"
+            :options="selectionOptions"
+            size="small"
+            filterable
+            :disabled="machine.mode === 'auto'"
+            @update:value="(value) => choose(machine, value)"
+          />
+        </div>
+        <div class="field">
+          <n-text depth="3" class="field-label">Score</n-text>
+          <n-text>{{ formatScore(machine.score) }}</n-text>
+        </div>
+        <div class="field">
+          <n-text depth="3" class="field-label">Best</n-text>
+          <n-text depth="3" class="text-break">
+            {{ machine.best ? `${machine.best} (${formatScore(machine.bestScore)})` : '—' }}
+          </n-text>
+        </div>
+        <div class="field field-wide">
+          <n-text depth="3" class="field-label">Evaluation</n-text>
+          <n-text v-if="!machine.evaluation" depth="3">—</n-text>
+          <n-text v-else-if="machine.evaluation.running" depth="2">
+            {{ machine.evaluation.phase }} {{ machine.evaluation.done }}/{{
+              machine.evaluation.total
+            }}
+          </n-text>
+          <n-text v-else-if="machine.evaluation.error" type="warning">
+            {{ machine.evaluation.error }}
+          </n-text>
+          <n-text v-else depth="3">
+            {{
+              machine.evaluation.best
+                ? `${machine.evaluation.best} (${formatScore(machine.evaluation.score)})`
+                : 'no usable candidate'
+            }}
+          </n-text>
+        </div>
+        <div class="field">
+          <n-text depth="3" class="field-label">Health</n-text>
+          <n-tag size="small" :type="healthType(machine.report?.health ?? '')">
+            {{ machine.report?.health || 'no report' }}
+          </n-tag>
+        </div>
+        <div class="field">
+          <n-text depth="3" class="field-label">Latency</n-text>
+          <n-text>{{ formatLatency(latency[machine.name] ?? null) }}</n-text>
+        </div>
+        <div class="field">
+          <n-text depth="3" class="field-label">Reported revision</n-text>
+          <n-text depth="3" class="text-break" :title="machine.report?.revision || ''">
+            {{ shortRevision(machine.report?.revision) }}
+          </n-text>
+        </div>
+        <div class="field">
+          <n-text depth="3" class="field-label">Last report</n-text>
+          <n-text>{{ formatTimestamp(machine.report?.reportedAt ?? null) }}</n-text>
+        </div>
+      </div>
+
+      <div class="item-actions">
+        <n-button
+          size="small"
+          :disabled="
+            machine.mode !== 'auto' ||
+            machine.evaluation?.running === true ||
+            busy === `auto:${machine.name}`
+          "
+          :loading="machine.evaluation?.running === true || busy === `auto:${machine.name}`"
+          @click="evaluate(machine)"
+        >
+          Evaluate
+        </n-button>
+        <n-button
+          size="small"
+          :loading="busy === `latency:${machine.name}`"
+          :disabled="testTag(machine) === null"
+          @click="test(machine)"
+        >
+          Test latency
+        </n-button>
+        <n-popconfirm @positive-click="remove(machine)">
+          <template #trigger>
+            <n-button size="small" type="error" :disabled="machine.reachable">Delete</n-button>
+          </template>
+          Forget {{ machine.name }}? It returns if its agent connects again.
+        </n-popconfirm>
+      </div>
+    </n-card>
+
+    <n-card v-if="!store.machines.length">
+      <n-text depth="3">No machines connected yet.</n-text>
+    </n-card>
+  </div>
 </template>
+
+<style scoped>
+.field-wide {
+  grid-column: 1 / -1;
+}
+</style>

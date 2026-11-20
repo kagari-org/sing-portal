@@ -11,9 +11,11 @@ import {
   type DataTableColumns,
 } from 'naive-ui'
 import { api, formatTimestamp, type AuditEntry, type Snapshot } from '../api'
+import { useIsCompact } from '../composables/useMediaQuery'
 import { usePortalStore } from '../stores/portal'
 
 const store = usePortalStore()
+const isCompact = useIsCompact()
 const message = useMessage()
 const audit = ref<AuditEntry[]>([])
 const importing = ref(false)
@@ -81,6 +83,10 @@ watch(() => store.tick, () => {
 </script>
 
 <template>
+  <div class="toolbar">
+    <h2 class="page-title">Settings</h2>
+  </div>
+
   <n-space vertical size="large">
     <n-alert type="warning" title="Backups contain subscription credentials">
       The exported file holds the raw subscription content and URLs, which is equivalent to full
@@ -88,7 +94,7 @@ watch(() => store.tick, () => {
     </n-alert>
 
     <n-card title="Backup and restore">
-      <n-space>
+      <n-space wrap>
         <n-button type="primary" @click="download">Export JSON</n-button>
         <n-button :loading="importing" @click="pickFile">Import JSON</n-button>
         <input ref="fileInput" type="file" accept="application/json" hidden @change="onFilePicked" />
@@ -102,13 +108,52 @@ watch(() => store.tick, () => {
       <template #header-extra>
         <n-button size="small" @click="loadAudit">Refresh</n-button>
       </template>
+
       <n-data-table
+        v-if="!isCompact"
         :columns="auditColumns"
         :data="audit"
         :bordered="false"
         :max-height="420"
+        :scroll-x="760"
         virtual-scroll
       />
+
+      <div v-else class="audit-list">
+        <div v-for="entry in audit" :key="entry.id" class="audit-item">
+          <div class="item-head">
+            <n-text strong>{{ entry.action }}</n-text>
+            <n-text depth="3">{{ formatTimestamp(entry.at) }}</n-text>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <n-text depth="3" class="field-label">Actor</n-text>
+              <n-text class="text-break">{{ entry.actor }}</n-text>
+            </div>
+            <div class="field">
+              <n-text depth="3" class="field-label">Target</n-text>
+              <n-text class="text-break">{{ entry.target }}</n-text>
+            </div>
+            <div v-if="entry.detail" class="field field-wide">
+              <n-text depth="3" class="field-label">Detail</n-text>
+              <n-text class="text-break">{{ entry.detail }}</n-text>
+            </div>
+          </div>
+        </div>
+        <n-text v-if="!audit.length" depth="3">No audit entries yet.</n-text>
+      </div>
     </n-card>
   </n-space>
 </template>
+
+<style scoped>
+.audit-item + .audit-item {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(128, 128, 128, 0.2);
+}
+
+.field-wide {
+  grid-column: 1 / -1;
+}
+</style>

@@ -17,9 +17,12 @@ import {
   type DataTableColumns,
 } from 'naive-ui'
 import { api, formatDuration, formatTimestamp, type Subscription } from '../api'
+import { useIsCompact, useIsMobile } from '../composables/useMediaQuery'
 import { usePortalStore } from '../stores/portal'
 
 const store = usePortalStore()
+const isCompact = useIsCompact()
+const isMobile = useIsMobile()
 const message = useMessage()
 const busy = ref<string | null>(null)
 const drawer = ref(false)
@@ -208,16 +211,66 @@ onMounted(() => {
 
 <template>
   <div class="toolbar">
-    <h2 style="margin: 0">Subscriptions</h2>
+    <h2 class="page-title">Subscriptions</h2>
     <n-button type="primary" @click="openCreate">Import</n-button>
   </div>
 
-  <n-card>
+  <n-card v-if="!isCompact">
     <n-data-table :columns="columns" :data="store.subscriptions" :bordered="false" />
   </n-card>
 
-  <n-drawer v-model:show="drawer" :width="520">
-    <n-drawer-content :title="editing ? `Edit ${editing.name}` : 'Import subscription'">
+  <div v-else class="mobile-list">
+    <n-card v-for="row in store.subscriptions" :key="row.id" size="small">
+      <div class="item-head">
+        <div class="item-heading">
+          <n-text strong>{{ row.name }}</n-text>
+          <n-text depth="3" code class="text-break">{{ row.slug }}</n-text>
+        </div>
+        <n-switch :value="row.enabled" @update:value="(value) => toggle(row, value)" />
+      </div>
+
+      <div class="field-grid">
+        <div class="field">
+          <n-text depth="3" class="field-label">Format</n-text>
+          <n-tag size="small">{{ row.format }} / {{ row.source }}</n-tag>
+        </div>
+        <div class="field">
+          <n-text depth="3" class="field-label">Nodes</n-text>
+          <n-text>{{ row.outboundCount }}</n-text>
+        </div>
+        <div class="field">
+          <n-text depth="3" class="field-label">Interval</n-text>
+          <n-text>{{ formatDuration(row.refreshIntervalSecs) }}</n-text>
+        </div>
+        <div class="field">
+          <n-text depth="3" class="field-label">Last refresh</n-text>
+          <n-text>{{ formatTimestamp(row.lastFetchedAt) }}</n-text>
+        </div>
+        <div class="field field-wide">
+          <n-text depth="3" class="field-label">Status</n-text>
+          <n-tag :type="row.lastError ? 'error' : 'success'" size="small" class="text-break">
+            {{ row.lastError || 'ok' }}
+          </n-tag>
+        </div>
+      </div>
+
+      <div class="item-actions">
+        <n-button size="small" :loading="busy === row.id" @click="refresh(row)">Refresh</n-button>
+        <n-button size="small" @click="openEdit(row)">Edit</n-button>
+        <n-button size="small" type="error" ghost @click="remove(row)">Delete</n-button>
+      </div>
+    </n-card>
+
+    <n-card v-if="!store.subscriptions.length">
+      <n-text depth="3">No subscriptions yet. Import one to get started.</n-text>
+    </n-card>
+  </div>
+
+  <n-drawer v-model:show="drawer" :width="isMobile ? '100%' : 520">
+    <n-drawer-content
+      :title="editing ? `Edit ${editing.name}` : 'Import subscription'"
+      closable
+    >
       <n-form label-placement="top">
         <n-form-item label="Name">
           <n-input v-model:value="form.name" placeholder="e.g. Provider A" />
@@ -255,3 +308,9 @@ onMounted(() => {
     </n-drawer-content>
   </n-drawer>
 </template>
+
+<style scoped>
+.field-wide {
+  grid-column: 1 / -1;
+}
+</style>
